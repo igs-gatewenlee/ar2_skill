@@ -118,11 +118,12 @@ def check(lora_path: str, log_path: str) -> SanityResult:
             f"final loss {result.final_loss:.4f} > {_FINAL_LOSS_THRESHOLD} threshold"
         )
 
-    # Sample images check
-    workspace = "/".join(lora_path.split("/")[:-2])  # strip /output/{name}/file
-    samples_dir = f"{workspace}/output"
+    # Sample images check. lora_path = .../{workspace}/output/{name}/file ; its
+    # parent dir contains samples/ peer. Empirically verified 2026-05-15:
+    # ai-toolkit writes samples to .../output/{name}/samples/ (sibling of LoRA).
+    samples_dir = str(Path(lora_path).parent / "samples")
     r = ssh_exec(
-        f"find {samples_dir} -type d -name samples -exec ls {{}} \\; 2>/dev/null | wc -l"
+        f"ls {samples_dir} 2>/dev/null | wc -l"
     )
     sample_count = int(r.stdout.strip() or 0) if r.returncode == 0 else 0
     if sample_count == 0:

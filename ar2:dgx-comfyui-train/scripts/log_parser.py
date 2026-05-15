@@ -3,19 +3,19 @@
 Parses lines from `nohup python /root/ai-toolkit/run.py config.yaml > train.log 2>&1`
 to extract loss / step / lr metrics.
 
-ai-toolkit log format (verified against ai-toolkit source at
-`/root/ai-toolkit/jobs/process/BaseSDTrainProcess.py` line 2284):
+ai-toolkit log format (ground-truthed empirically against a 50-step Dr_Eilin
+run, 2026-05-15):
 
-The trainer uses a tqdm progress bar (`ToolkitProgressBar`). Postfix string
-is built as `lr: {learning_rate:.1e}` then appended with each
-`loss_dict.items()` entry as `{key}: {value:.3e}`. Each tqdm update writes
-a line of the form:
+The trainer uses tqdm and writes the config `name` as the bar description
+(NOT "Epoch N" — ai-toolkit is step-based, doesn't track epochs in the bar).
+Postfix is `lr: {learning_rate:.1e}` then loss as `{key}: {value:.3e}`.
+Real lines look like:
 
-    Epoch 0:  50%|███████| 750/1500 [12:34<12:34, 1.41s/it, lr: 1.0e-04 loss: 1.234e-01]
+    dreilin_smoke_20260515:  10%|█         | 5/50 [00:31<04:11, lr: 1.0e-04 loss: 3.074e-01]
 
 We anchor `step/total` on the tqdm `[elapsed` marker so we don't false-match
-on description text (e.g. "Phase 1/2"). lr is always before loss because
-ai-toolkit composes `prog_bar_string` that way.
+on description text. lr is always before loss because ai-toolkit composes
+`prog_bar_string` that way.
 
 v1 uses regex adapters. Future: add more trainers via adapter pattern.
 """
@@ -40,7 +40,8 @@ _STEP_PATTERN = re.compile(
 _LR_PATTERN = re.compile(
     r"lr:\s*(?P<lr>[-+]?\d*\.?\d+(?:e[-+]?\d+)?)", re.IGNORECASE
 )
-# tqdm description often is "Epoch N" without total. Make total optional.
+# Kept for future trainers (kohya etc.) that surface epochs. ai-toolkit
+# itself is step-based and won't match — epoch field stays None in that case.
 _EPOCH_PATTERN = re.compile(
     r"Epoch\s+(?P<epoch>\d+)(?:\s*/\s*(?P<total_epoch>\d+))?",
     re.IGNORECASE,

@@ -97,10 +97,15 @@ def launch(workspace: str, config_remote_path: str) -> tuple[int, str]:
     log_path = f"{workspace}/train.log"
     pid_path = f"{workspace}/train.pid"
 
+    # </dev/null on stdin is essential — without it, SSH stays attached to
+    # the nohup'd process's inherited stdin and the channel blocks until the
+    # background process exits (causing this whole call to time out).
+    # Verified empirically against ai-toolkit which doesn't read stdin but
+    # still keeps the fd open. setsid further detaches from any tty/job-ctrl.
     cmd = (
         f"cd {workspace} && "
-        f"nohup python3 {AITK_RUN_PY} {config_remote_path} "
-        f"> {log_path} 2>&1 & "
+        f"setsid nohup python3 {AITK_RUN_PY} {config_remote_path} "
+        f"</dev/null > {log_path} 2>&1 & "
         f"echo $! > {pid_path}"
     )
     r = ssh_exec(cmd, timeout=30)
@@ -156,13 +161,18 @@ def stream_log(log_path: str, since_byte: int = 0) -> tuple[str, int]:
 def find_latest_lora_checkpoint(workspace: str, config_name: str) -> str | None:
     """Find the latest ai-toolkit LoRA checkpoint on DGX.
 
-    ai-toolkit names checkpoints as `{config_name}_{NNNNNNNNN}.safetensors`
-    (9-digit zero-padded step) and keeps the last N per `max_step_saves_to_keep`.
-    Returns the highest-step checkpoint path, falls back to legacy
-    `{config_name}.safetensors` if no step-suffixed file exists, or None if
-    neither is found (training likely failed to save).
-
-    Verified against /root/lora_training/Dr_Eilin/output/dreilin_v1/.
+    ai-toolkit naming (verified empirically 2026-05-15 against 50-step run):
+      - `{config_name}.safetensors`              — final checkpoint after training
+      - `{config_name}_{NNNNNNNNN}.safetensors`  — intermediate save_every snapshots
+                                                   (9-digit zero-padded step,
+                                                   kept up to max_step_saves_to_keep)
+    Strategy: try step-suffixed first (preserves intent if a partial run was
+    interrupted before legacy was written), fall back to legacy. Returns None
+    only if neither is found (training likely failed to save).
+    NOTE: full-length (1500-step) runs with save_every=500 not yet ground-truthed —
+    whether legacy and step-suffix can coexist (and which is canonical) is
+    still TBD; this matters only if you need the snapshot at step N rather
+    than the final, which the current contract does not provide.
     """
     output_dir = f"{workspace}/output/{config_name}"
     # ai-toolkit default: step-suffixed checkpoints. Use `find -maxdepth 1`
