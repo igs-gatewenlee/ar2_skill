@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <title>ar2:* 家族總覽</title>
+  <style>
+    /* ===== THEME VARIABLES ===== */
+    :root {
+      --bg-primary: #f5f5f7;
+      --bg-secondary: #ffffff;
+      --bg-tertiary: #e8e8ed;
+      --border: #d1d1d6;
+      --text-primary: #1d1d1f;
+      --text-secondary: #6e6e73;
+      --text-tertiary: #aeaeb2;
+      --accent: #0071e3;
+      --accent-hover: #0077ed;
+      --success: #34c759;
+      --warning: #ff9f0a;
+      --error: #ff3b30;
+      --pipeline-bg: #fff8e6;
+      --pipeline-border: #ffd966;
+      --selected-bg: #e8f4fd;
+      --selected-border: #0071e3;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg-primary: #1d1d1f;
+        --bg-secondary: #2d2d2f;
+        --bg-tertiary: #3a3a3c;
+        --border: #424245;
+        --text-primary: #f5f5f7;
+        --text-secondary: #aeaeb2;
+        --text-tertiary: #636366;
+        --accent: #0a84ff;
+        --accent-hover: #409cff;
+        --pipeline-bg: #3a2d18;
+        --pipeline-border: #b88b1e;
+        --selected-bg: rgba(10, 132, 255, 0.18);
+        --selected-border: #0a84ff;
+      }
+    }
+
+    /* ===== RESET & LAYOUT ===== */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang TC", "Microsoft JhengHei", sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.6;
+      padding: 0;
+    }
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
+    }
+
+    /* ===== TYPOGRAPHY ===== */
+    h1 { font-size: 1.75rem; font-weight: 600; margin-bottom: 0.5rem; }
+    h2 { font-size: 1.4rem; font-weight: 600; margin: 0; }
+    h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 0.4rem; color: var(--text-primary); }
+    p { margin-bottom: 0.5rem; }
+    .subtitle { color: var(--text-secondary); font-size: 0.95rem; margin-bottom: 1.5rem; }
+    .label { font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.6rem; font-weight: 600; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { color: var(--accent-hover); }
+    code {
+      background: var(--bg-tertiary);
+      padding: 0.1em 0.4em;
+      border-radius: 4px;
+      font-family: "SF Mono", Monaco, "Cascadia Code", Consolas, monospace;
+      font-size: 0.88em;
+    }
+    strong { color: var(--text-primary); font-weight: 600; }
+
+    /* ===== HEADER ===== */
+    header.page-header {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 1.25rem;
+      margin-bottom: 2rem;
+    }
+    .page-header .meta {
+      color: var(--text-secondary);
+      font-size: 0.8rem;
+    }
+
+    /* ===== PIPELINE ===== */
+    .section { margin-bottom: 2.5rem; }
+    .pipeline-section {
+      background: var(--pipeline-bg);
+      border: 1px solid var(--pipeline-border);
+      border-radius: 14px;
+      padding: 1.5rem 1.5rem 1.25rem;
+    }
+    .pipeline {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin-top: 1rem;
+    }
+    .pipeline-node {
+      background: var(--bg-secondary);
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      min-width: 130px;
+      text-align: center;
+      transition: all 0.15s ease;
+      color: var(--text-primary);
+    }
+    .pipeline-node:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0, 113, 227, 0.12);
+    }
+    .pipeline-emoji { font-size: 1.8rem; margin-bottom: 0.25rem; }
+    .pipeline-name { font-size: 0.9rem; font-weight: 600; }
+    .pipeline-arrow {
+      font-size: 1.4rem;
+      color: var(--text-secondary);
+      font-weight: 700;
+    }
+
+    /* ===== INDEX CARDS ===== */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 0.75rem;
+      margin-top: 0.5rem;
+    }
+    .card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      transition: all 0.15s ease;
+      color: var(--text-primary);
+    }
+    .card:hover {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    }
+    .card-emoji { font-size: 1.6rem; margin-bottom: 0.3rem; }
+    .card-name { font-size: 0.95rem; font-weight: 600; margin-bottom: 0.4rem; }
+    .card-badges { display: flex; gap: 0.3rem; flex-wrap: wrap; justify-content: center; }
+
+    /* ===== BADGES ===== */
+    .badge {
+      font-size: 0.7rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 10px;
+      font-weight: 600;
+    }
+    .b-installed { background: #d1f4dd; color: #1f7a3a; }
+    .b-pending   { background: #fff4d3; color: #8b6914; }
+    .b-orphan    { background: #ffd3d3; color: #8b1414; }
+    .b-stable    { background: #d3e6ff; color: #1a4d8f; }
+    .b-beta      { background: #ffe6d3; color: #8b5414; }
+    .b-exp       { background: #f0d3ff; color: #5a1a8b; }
+    @media (prefers-color-scheme: dark) {
+      .b-installed { background: #1a4d2a; color: #a8e8b8; }
+      .b-pending   { background: #4d3a1a; color: #f0d090; }
+      .b-orphan    { background: #4d1a1a; color: #f0a0a0; }
+      .b-stable    { background: #1a3a5e; color: #a8c8f0; }
+      .b-beta      { background: #4d2a1a; color: #f0c090; }
+      .b-exp       { background: #3a1a4d; color: #d8a0f0; }
+    }
+
+    /* ===== BROKEN REGION ===== */
+    .broken-section { background: rgba(255, 59, 48, 0.06); border-radius: 12px; padding: 1.25rem; border: 1px dashed var(--error); }
+    .broken-section.hidden { display: none; }
+    .broken-section h2 { color: var(--error); }
+
+    /* ===== SKILL DETAILED SECTIONS ===== */
+    .skill-section {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.5rem 1.75rem;
+      margin-bottom: 1.25rem;
+      scroll-margin-top: 1rem;
+    }
+    .skill-section header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      padding-bottom: 1rem;
+      margin-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .skill-emoji { font-size: 1.8rem; }
+    .skill-section h2 { flex: 0 1 auto; }
+    .skill-id {
+      color: var(--text-secondary);
+      font-size: 0.8rem;
+      font-family: "SF Mono", Monaco, Consolas, monospace;
+      background: var(--bg-tertiary);
+      padding: 0.15rem 0.5rem;
+      border-radius: 6px;
+    }
+    .skill-badges {
+      display: flex;
+      gap: 0.3rem;
+      margin-left: auto;
+    }
+    .subsection { margin-bottom: 1.25rem; }
+    .subsection:last-child { margin-bottom: 0; }
+    .subsection ul { margin-left: 1.25rem; margin-bottom: 0.5rem; }
+    .subsection li { margin-bottom: 0.35rem; }
+    .subsection p { margin-bottom: 0.6rem; }
+    .subsection table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-top: 0.4rem;
+      margin-bottom: 0.6rem;
+      font-size: 0.92rem;
+    }
+    .subsection th,
+    .subsection td {
+      border: 1px solid var(--border);
+      padding: 0.4rem 0.6rem;
+      text-align: left;
+    }
+    .subsection th {
+      background: var(--bg-tertiary);
+      font-weight: 600;
+    }
+
+    /* ===== ERROR BANNER (broken skills) ===== */
+    .error-banner {
+      background: rgba(255, 59, 48, 0.08);
+      border: 1px solid rgba(255, 59, 48, 0.3);
+      color: var(--error);
+      padding: 0.65rem 0.85rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+    }
+
+    /* ===== FOOTER ===== */
+    footer.page-footer {
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      color: var(--text-tertiary);
+      font-size: 0.78rem;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <header class="page-header">
+      <h1>🗂️ ar2:* 家族總覽</h1>
+      <p class="subtitle">所有 <code>ar2:</code> 開頭 skill 的視覺化說明書 — 怎麼用、何時用、踩過什麼坑。</p>
+      <div class="meta">生成時間：<code>{{GENERATED_AT_DISPLAY}}</code> · 重新整理請執行 <code>refetch</code></div>
+    </header>
+
+    <section class="section pipeline-section">
+      <div class="label">典型工作流（workflow 類 skill 的常見順序）</div>
+      {{PIPELINE}}
+    </section>
+
+    <section class="section">
+      <div class="label">📑 主要 skill（workflow）</div>
+      <div class="cards">
+        {{WORKFLOW_CARDS}}
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="label">🛠️ 輔助工具（meta）</div>
+      <div class="cards">
+        {{META_CARDS}}
+      </div>
+    </section>
+
+    <section class="section broken-section {{BROKEN_VISIBILITY}}">
+      <h2>⚠️ 待補 / 損壞的 skill</h2>
+      <p class="subtitle">這些 skill 的 OVERVIEW.md 不存在或格式錯誤，請補上後重新 refetch。</p>
+      <div class="cards">
+        {{BROKEN_CARDS}}
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="label">📖 詳細說明（按家族順序）</div>
+      {{SKILL_SECTIONS}}
+    </section>
+
+    <footer class="page-footer">
+      <p>ar2:skill-overview · 此 HTML 為知識庫，內容由各 skill 的 <code>OVERVIEW.md</code> 自動整理 · 改了 OVERVIEW.md 後請執行 refetch 重新整理</p>
+    </footer>
+
+  </div>
+</body>
+</html>

@@ -1,0 +1,17 @@
+# Credentials — NEVER commit this skill anywhere
+config.py
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local cache
+.cache/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store

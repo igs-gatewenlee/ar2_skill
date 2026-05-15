@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Block commits that contain literal PASSWORD assignments.
+# Activate by: cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+set -e
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)
+
+if [ -z "$STAGED" ]; then
+    exit 0
+fi
+
+HITS=$(echo "$STAGED" | xargs -I{} grep -nE 'PASSWORD[[:space:]]*=[[:space:]]*["'"'"']' {} 2>/dev/null || true)
+
+if [ -n "$HITS" ]; then
+    echo ""
+    echo "ERROR: Found hard-coded PASSWORD in staged files:"
+    echo "$HITS"
+    echo ""
+    echo "Refusing commit. Move credentials to config.py (in .gitignore)."
+    exit 1
+fi
+
+exit 0

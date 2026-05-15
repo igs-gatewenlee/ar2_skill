@@ -1,0 +1,237 @@
+{
+  "_comment": "flux_pulid: ar2:dgx-comfyui-gen bundled workflow. Parameters injected at runtime by workflow_params.py",
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "flux1-dev.safetensors",
+      "weight_dtype": "fp8_e4m3fn"
+    }
+  },
+  "2": {
+    "class_type": "DualCLIPLoader",
+    "inputs": {
+      "clip_name1": "clip_l.safetensors",
+      "clip_name2": "t5xxl_fp8_e4m3fn.safetensors",
+      "type": "flux"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "flux_ae.safetensors"
+    }
+  },
+  "20": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": ""
+    }
+  },
+  "21": {
+    "class_type": "PulidFluxModelLoader",
+    "inputs": {
+      "pulid_file": "pulid_flux_v0.9.1.safetensors"
+    }
+  },
+  "22": {
+    "class_type": "PulidFluxEvaClipLoader",
+    "inputs": {}
+  },
+  "23": {
+    "class_type": "PulidFluxInsightFaceLoader",
+    "inputs": {
+      "provider": "CUDA"
+    }
+  },
+  "24": {
+    "class_type": "ApplyPulidFlux",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "pulid_flux": [
+        "21",
+        0
+      ],
+      "eva_clip": [
+        "22",
+        0
+      ],
+      "face_analysis": [
+        "23",
+        0
+      ],
+      "image": [
+        "20",
+        0
+      ],
+      "weight": 0.9,
+      "start_at": 0.0,
+      "end_at": 1.0,
+      "fusion": "mean",
+      "fusion_weight_max": 1.0,
+      "fusion_weight_min": 0.0,
+      "train_step": 1000,
+      "use_gray": true
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": [
+        "2",
+        0
+      ]
+    }
+  },
+  "5": {
+    "class_type": "FluxGuidance",
+    "inputs": {
+      "conditioning": [
+        "4",
+        0
+      ],
+      "guidance": 3.5
+    }
+  },
+  "30": {
+    "class_type": "CLIPVisionLoader",
+    "inputs": {
+      "clip_name": "sigclip_vision_patch14_384.safetensors"
+    }
+  },
+  "31": {
+    "class_type": "CLIPVisionEncode",
+    "inputs": {
+      "clip_vision": [
+        "30",
+        0
+      ],
+      "image": [
+        "20",
+        0
+      ],
+      "crop": "center"
+    }
+  },
+  "32": {
+    "class_type": "StyleModelLoader",
+    "inputs": {
+      "style_model_name": "flux1-redux-dev.safetensors"
+    }
+  },
+  "33": {
+    "class_type": "StyleModelApply",
+    "inputs": {
+      "conditioning": [
+        "5",
+        0
+      ],
+      "style_model": [
+        "32",
+        0
+      ],
+      "clip_vision_output": [
+        "31",
+        0
+      ],
+      "strength": 1.0,
+      "strength_type": "multiply"
+    }
+  },
+  "6": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 0
+    }
+  },
+  "7": {
+    "class_type": "BasicGuider",
+    "inputs": {
+      "model": [
+        "24",
+        0
+      ],
+      "conditioning": [
+        "33",
+        0
+      ]
+    }
+  },
+  "8": {
+    "class_type": "BasicScheduler",
+    "inputs": {
+      "scheduler": "normal",
+      "steps": 20,
+      "denoise": 1.0,
+      "model": [
+        "24",
+        0
+      ]
+    }
+  },
+  "9": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    }
+  },
+  "40": {
+    "class_type": "EmptySD3LatentImage",
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    }
+  },
+  "10": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "noise": [
+        "6",
+        0
+      ],
+      "guider": [
+        "7",
+        0
+      ],
+      "sampler": [
+        "9",
+        0
+      ],
+      "sigmas": [
+        "8",
+        0
+      ],
+      "latent_image": [
+        "40",
+        0
+      ]
+    }
+  },
+  "12": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "10",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    }
+  },
+  "13": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "12",
+        0
+      ]
+    }
+  }
+}

@@ -1,0 +1,20 @@
+# Credentials — NEVER commit this skill anywhere
+config.py
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local cache
+.cache/
+
+# Local outputs (CWD-relative defaults land here when running from skill dir)
+outputs/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store

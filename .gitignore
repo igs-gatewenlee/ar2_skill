@@ -1,0 +1,16 @@
+# Python bytecode (any depth)
+__pycache__/
+*.pyc
+
+# Per-skill credentials (each skill's own .gitignore also excludes config.py)
+**/config.py
+
+# OS / editor junk
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Local cache (XDG-style cache lives at ~/.cache/ar2-skill-overview/)
+.cache/
