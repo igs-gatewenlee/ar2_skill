@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -97,34 +98,110 @@ def launch(workspace: str, config_remote_path: str) -> tuple[int, str]:
     log_path = f"{workspace}/train.log"
     pid_path = f"{workspace}/train.pid"
 
-    # </dev/null on stdin is essential — without it, SSH stays attached to
-    # the nohup'd process's inherited stdin and the channel blocks until the
-    # background process exits (causing this whole call to time out).
-    # Verified empirically against ai-toolkit which doesn't read stdin but
-    # still keeps the fd open. setsid further detaches from any tty/job-ctrl.
+    # SSH + backgrounded nohup is famously hard to detach cleanly: even with
+    # setsid + </dev/null on the inner process, the outer SSH session can fail
+    # to close until something happens on the channel. Empirically the
+    # detached python *does* start (verified across 2 real runs 2026-05-15);
+    # SSH client just blocks waiting for the wrapper shell. So: treat SSH
+    # TimeoutExpired as expected, then verify via the pid file written by the
+    # remote shell as its last action — if the file has a digit, the launch
+    # succeeded and the SSH session closing is the only thing missing.
     cmd = (
         f"cd {workspace} && "
         f"setsid nohup python3 {AITK_RUN_PY} {config_remote_path} "
         f"</dev/null > {log_path} 2>&1 & "
         f"echo $! > {pid_path}"
     )
-    r = ssh_exec(cmd, timeout=30)
-    if r.returncode != 0:
-        raise RuntimeError(f"failed to launch training: {r.stderr.strip()}")
+    try:
+        r = ssh_exec(cmd, timeout=30)
+        if r.returncode != 0:
+            raise RuntimeError(f"failed to launch training: {r.stderr.strip()}")
+    except subprocess.TimeoutExpired:
+        pass  # fall through to pid-file verification
 
-    # Read back PID
+    # Authoritative success signal: pid file is written iff the remote shell
+    # reached `echo $!`, which is the last command after the background job
+    # was spawned.
     r = ssh_exec(f"cat {pid_path}", timeout=5)
     pid_str = r.stdout.strip()
     if not pid_str.isdigit():
-        raise RuntimeError(f"failed to read PID: '{pid_str}'")
+        raise RuntimeError(
+            f"launch verification failed: pid file empty or missing "
+            f"({pid_path}). The remote shell did not complete `echo $!`."
+        )
 
-    return int(pid_str), log_path
+    # The `$!` written into train.pid is the bash wrapper that SSH server
+    # spawned to run `bash -c "..."`, NOT the detached python child. The
+    # wrapper can later be SIGHUP'd by the SSH server side while the
+    # setsid-detached python keeps running, causing kill -0 false negatives
+    # in is_alive() and a spurious "Training process ended". Resolve the
+    # real python PID here and overwrite train.pid so polling tracks the
+    # right process.
+    real_pid = _resolve_python_pid(config_remote_path)
+    if real_pid is not None:
+        ssh_exec(f"echo {real_pid} > {pid_path}", timeout=5)
+        return real_pid, log_path
+
+    # pgrep didn't find it — fall back to wrapper PID and warn caller via
+    # raise. (Unlikely under normal conditions; ai-toolkit always spawns a
+    # python that matches the config path.)
+    raise RuntimeError(
+        f"launch verification failed: no python process matched config "
+        f"path {config_remote_path}. Wrapper PID was {pid_str} but its "
+        f"child python could not be located."
+    )
+
+
+def _resolve_python_pid(config_remote_path: str, retries: int = 5) -> int | None:
+    """Find the ai-toolkit python PID by matching the config path.
+
+    `pgrep -f` matches *anywhere* in the cmdline, so it picks up both the
+    bash -c wrapper (whose cmdline contains the full inner command) and the
+    real python process. Filter for cmdlines that *start* with `python3` so
+    the wrapper is excluded. Retries a few times because the python process
+    may not appear in pgrep until ~hundreds of ms after `&` returns.
+    """
+    import time
+    for _ in range(retries):
+        r = ssh_exec(
+            f"pgrep -af 'run.py.*{config_remote_path}'",
+            timeout=10,
+        )
+        for line in r.stdout.splitlines():
+            parts = line.split(maxsplit=1)
+            if len(parts) < 2:
+                continue
+            pid_str, cmd = parts
+            if cmd.startswith(("python3 ", "python ")) and pid_str.isdigit():
+                return int(pid_str)
+        time.sleep(1)
+    return None
 
 
 def is_alive(pid: int) -> bool:
-    """Check DGX-side: is the training PID still running?"""
-    r = ssh_exec(f"kill -0 {pid} 2>/dev/null && echo ALIVE")
-    return r.stdout.strip() == "ALIVE"
+    """Check DGX-side: is the training PID still running?
+
+    Returns True when SSH succeeds and the process is alive, OR when SSH
+    is transiently unavailable (timeout, transient auth/network failure).
+    Only returns False when SSH succeeds and reports the process is gone.
+    This asymmetric default avoids long-running trainings being killed
+    locally by spurious is_alive=False from transient SSH hiccups
+    (the actual ai-toolkit process keeps running detached on DGX).
+    """
+    import time as _time
+    for attempt in range(3):
+        try:
+            r = ssh_exec(f"kill -0 {pid} 2>/dev/null && echo ALIVE", timeout=10)
+        except subprocess.TimeoutExpired:
+            _time.sleep(2)
+            continue
+        if r.returncode != 0:
+            _time.sleep(2)
+            continue
+        # SSH succeeded — stdout is authoritative
+        return r.stdout.strip() == "ALIVE"
+    # 3 SSH attempts all failed — assume alive (don't exit polling)
+    return True
 
 
 def tail_log(log_path: str, lines: int = 200) -> str:
@@ -161,23 +238,29 @@ def stream_log(log_path: str, since_byte: int = 0) -> tuple[str, int]:
 def find_latest_lora_checkpoint(workspace: str, config_name: str) -> str | None:
     """Find the latest ai-toolkit LoRA checkpoint on DGX.
 
-    ai-toolkit naming (verified empirically 2026-05-15 against 50-step run):
-      - `{config_name}.safetensors`              — final checkpoint after training
-      - `{config_name}_{NNNNNNNNN}.safetensors`  — intermediate save_every snapshots
+    ai-toolkit naming (ground-truthed empirically 2026-05-16 against 200-step
+    run with save_every=50 / max_step_saves_to_keep=2):
+      - `{config_name}.safetensors`              — final checkpoint, written
+                                                   exactly once when training
+                                                   completes (step == total)
+      - `{config_name}_{NNNNNNNNN}.safetensors`  — save_every snapshots
                                                    (9-digit zero-padded step,
                                                    kept up to max_step_saves_to_keep)
-    Strategy: try step-suffixed first (preserves intent if a partial run was
-    interrupted before legacy was written), fall back to legacy. Returns None
-    only if neither is found (training likely failed to save).
-    NOTE: full-length (1500-step) runs with save_every=500 not yet ground-truthed —
-    whether legacy and step-suffix can coexist (and which is canonical) is
-    still TBD; this matters only if you need the snapshot at step N rather
-    than the final, which the current contract does not provide.
+    Coexistence: after a clean run with save_every < total_steps, BOTH forms
+    are present. The legacy file is the canonical "final" — the step-suffixed
+    snapshots are older intermediates.
+
+    Strategy: prefer legacy (canonical final). Fall back to highest step-suffix
+    only when legacy is absent (training was interrupted before final write).
+    Returns None when neither is present (training failed to save anything).
     """
     output_dir = f"{workspace}/output/{config_name}"
-    # ai-toolkit default: step-suffixed checkpoints. Use `find -maxdepth 1`
-    # rather than ls glob so an unmatched pattern yields empty stdout (not
-    # the literal glob string).
+    # 1. Prefer legacy — written exactly at training completion.
+    legacy = f"{output_dir}/{config_name}.safetensors"
+    r = ssh_exec(f"test -f {legacy} && echo OK")
+    if r.stdout.strip() == "OK":
+        return legacy
+    # 2. Fallback: highest step-suffixed snapshot (training was interrupted).
     r = ssh_exec(
         f"find {output_dir} -maxdepth 1 -name '{config_name}_*.safetensors' "
         f"2>/dev/null | sort -V | tail -1"
@@ -185,9 +268,4 @@ def find_latest_lora_checkpoint(workspace: str, config_name: str) -> str | None:
     candidate = r.stdout.strip()
     if candidate:
         return candidate
-    # Fallback: legacy non-step-suffix name (in case ai-toolkit config differs)
-    legacy = f"{output_dir}/{config_name}.safetensors"
-    r = ssh_exec(f"test -f {legacy} && echo OK")
-    if r.stdout.strip() == "OK":
-        return legacy
     return None

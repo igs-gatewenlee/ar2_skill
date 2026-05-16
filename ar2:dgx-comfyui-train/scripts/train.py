@@ -258,15 +258,15 @@ def cmd_train(args: argparse.Namespace) -> int:
     # 8. launch
     print("\nLaunching training (background)...", flush=True)
     pid, log_path = trainer.launch(workspace, remote_config)
-    print(f"  PID: {pid}")
-    print(f"  log: {log_path}")
+    print(f"  PID: {pid}", flush=True)
+    print(f"  log: {log_path}", flush=True)
     started = time.time()
     cache.update(run_id,
                  state="running", started_at=started, pid=pid, log_path=log_path)
 
     # 9. poll log
     print(f"\nPolling log every {args.poll_interval}s. Ctrl-C to detach "
-          f"(training will continue on DGX).\n")
+          f"(training will continue on DGX).\n", flush=True)
     offset = 0
     try:
         while trainer.is_alive(pid):
