@@ -33,11 +33,12 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS=(
   "ar2:dgx-comfyui-check"
   "ar2:dgx-comfyui-gen"
+  "ar2:dgx-comfyui-plan"
   "ar2:dgx-comfyui-train"
   "ar2:skill-overview"
 )
 
-# Skills carrying DGX credentials to chmod 600
+# Skills carrying DGX credentials to chmod 600 (plan skill is local-only, no config.py)
 SECRET_SKILLS=(
   "ar2:dgx-comfyui-check"
   "ar2:dgx-comfyui-gen"
