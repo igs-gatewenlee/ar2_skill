@@ -39,6 +39,8 @@ from config import (  # noqa: E402
 from ssh_client import ssh_exec, ensure_tunnel, scp_get, scp_put  # noqa: E402
 import comfyui_api as api  # noqa: E402
 from workflow_params import inject, WorkflowParamError  # noqa: E402
+import plan_runner  # noqa: E402
+import plan_loader  # noqa: E402
 
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
@@ -56,7 +58,14 @@ def parse_args() -> argparse.Namespace:
         help="Bundled workflow name (without .json) OR absolute path to .json. "
         "Default: flux_basic",
     )
-    p.add_argument("--prompt", required=True, help="Positive prompt")
+    # plan-driven mode (BC-13, BC-14) — mutually exclusive with --prompt
+    plan_grp = p.add_mutually_exclusive_group()
+    plan_grp.add_argument("--plan", metavar="PLAN_ID",
+                          help="Run plan in cwd/plans/{id}_outline.md (batch)")
+    plan_grp.add_argument("--preset", metavar="PRESET_ID",
+                          help="Run preset in ar2:dgx-comfyui-plan/presets/")
+    # --prompt no longer required at parse time (only when not in plan mode)
+    p.add_argument("--prompt", default=None, help="Positive prompt (single-shot mode)")
     p.add_argument("--negative-prompt", default=None)
     p.add_argument("--seed", type=int, default=None,
                    help="Default: random 32-bit int")
@@ -137,9 +146,31 @@ def humanize_seconds(s: float) -> str:
 def main() -> int:
     args = parse_args()
 
+    # plan-driven mode early-return (BC-13/14)
+    if args.plan is not None or args.preset is not None:
+        plans_dir = Path.cwd() / "plans"
+        try:
+            if args.plan is not None:
+                return plan_runner.run_plan(args.plan, plans_dir)
+            presets_dir = (
+                SKILL_DIR.parent / "ar2:dgx-comfyui-plan" / "presets"
+            )
+            return plan_runner.run_preset(args.preset, presets_dir, plans_dir)
+        except (FileNotFoundError, ValueError) as e:
+            print(f"❌ {e}")
+            return 1
+
+    # single-shot mode (legacy /既有 path)
+    if args.prompt is None:
+        print("❌ --prompt is required in single-shot mode "
+              "(or use --plan / --preset for batch).")
+        return 1
+
     # --- 1. load workflow ---
     workflow_path = resolve_workflow_path(args.workflow)
     workflow = json.loads(workflow_path.read_text())
+    # Strip _comment / non-node top-level keys (12 zodiac session bug fix)
+    workflow = plan_loader.strip_workflow_metadata(workflow)
 
     # --- 3. resolve tag + subdir ---
     tag, subdir = make_tag_subdir(args.tag)
