@@ -89,6 +89,7 @@ def inject(
     height: int | None = None,
     face_ref_filename: str | None = None,
     output_subdir: str | None = None,
+    filename_prefix_override: str | None = None,
     deep_copy: bool = True,
 ) -> dict:
     """Return a workflow dict with the given parameters injected.
@@ -175,12 +176,20 @@ def inject(
         for _nid, node in load_nodes:
             node["inputs"]["image"] = image_path
 
-    # --- output_subdir / SaveImage filename_prefix ---
-    if output_subdir is not None:
+    # --- output_subdir + filename_prefix_override → SaveImage filename_prefix ---
+    if output_subdir is not None or filename_prefix_override is not None:
         save_nodes = _find_nodes_by_class(wf, "SaveImage")
         if not save_nodes:
             raise WorkflowParamError("no SaveImage node found")
-        prefix = f"{output_subdir}/img"
+        if filename_prefix_override is not None:
+            # Caller-provided full prefix (plan_runner uses
+            # `{output_subdir}/{ch{N}/{NN}_{name}}` for chapter-encoded slugs)
+            prefix = (
+                f"{output_subdir}/{filename_prefix_override}"
+                if output_subdir else filename_prefix_override
+            )
+        else:
+            prefix = f"{output_subdir}/img"
         for _nid, node in save_nodes:
             node["inputs"]["filename_prefix"] = prefix
 

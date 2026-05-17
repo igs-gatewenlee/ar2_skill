@@ -12,8 +12,9 @@ minimal inline parser if plan_schema cannot be located.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -118,11 +119,27 @@ def _load(path: Path, *, mode: str) -> LoadedPlan:
 
 
 _SENTINEL_EMPTY = ("(none)", "", None)
+# Recognize chapter-encoded slugs like `ch1_01_home_morning`
+_CHAPTER_SLUG_RE = re.compile(r"^(ch\d+)_(\d{2})_(.+)$")
 
 
 def _norm_style(value) -> str:
     """Normalize style anchor to empty string when unset."""
     return "" if value in _SENTINEL_EMPTY else value
+
+
+def _slug_to_filename_prefix(slug: str, global_index: int) -> str:
+    """Map slug → filename_prefix.
+
+    If slug matches `ch{N}_{NN}_{rest}` (chapter-encoded), return
+    `ch{N}/{NN}_{rest}` so ComfyUI SaveImage drops the file into a
+    chapter subdir. Otherwise flat fallback `{NN}_{slug}` (1-based).
+    """
+    m = _CHAPTER_SLUG_RE.match(slug)
+    if m:
+        chapter, num, rest = m.groups()
+        return f"{chapter}/{num}_{rest}"
+    return f"{global_index:02d}_{slug}"
 
 
 def _expand_items(plan) -> list[ResolvedItem]:
@@ -138,7 +155,7 @@ def _expand_items(plan) -> list[ResolvedItem]:
             slug=item.slug,
             final_prompt=final.strip(),
             seed=next(seed_seq),
-            filename_prefix=f"{i:02d}_{item.slug}",
+            filename_prefix=_slug_to_filename_prefix(item.slug, i),
         ))
     return resolved
 
@@ -181,6 +198,41 @@ def _build_seed_iter(strategy: dict, count: int):
     import secrets as _s
     for _ in range(count):
         yield _s.randbits(32)
+
+
+def parse_items_spec(spec: str) -> set[int]:
+    """Parse subset spec into set of 1-based indices.
+
+    Examples:
+        '5'        → {5}
+        '1-5'      → {1,2,3,4,5}
+        '1,3,5-7'  → {1,3,5,6,7}
+
+    Raises ValueError on malformed input.
+    """
+    result: set[int] = set()
+    for chunk in spec.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "-" in chunk:
+            lo, hi = chunk.split("-", 1)
+            result.update(range(int(lo), int(hi) + 1))
+        else:
+            result.add(int(chunk))
+    return result
+
+
+def filter_items(loaded: "LoadedPlan", items_spec: str) -> "LoadedPlan":
+    """Return new LoadedPlan with items filtered to indices in items_spec."""
+    indices = parse_items_spec(items_spec)
+    filtered = [it for it in loaded.items if it.index in indices]
+    if not filtered:
+        raise ValueError(
+            f"items_spec '{items_spec}' matched 0 items (plan has "
+            f"{len(loaded.items)} items, indices 1..{len(loaded.items)})"
+        )
+    return replace(loaded, items=filtered)
 
 
 def strip_workflow_metadata(workflow: dict) -> dict:

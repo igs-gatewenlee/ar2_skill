@@ -64,6 +64,8 @@ def parse_args() -> argparse.Namespace:
                           help="Run plan in cwd/plans/{id}_outline.md (batch)")
     plan_grp.add_argument("--preset", metavar="PRESET_ID",
                           help="Run preset in ar2:dgx-comfyui-plan/presets/")
+    p.add_argument("--items", default=None, metavar="SPEC",
+                   help="Items subset for --plan/--preset, e.g. '5' / '1-5' / '1,3,5-7'")
     # --prompt no longer required at parse time (only when not in plan mode)
     p.add_argument("--prompt", default=None, help="Positive prompt (single-shot mode)")
     p.add_argument("--negative-prompt", default=None)
@@ -151,11 +153,13 @@ def main() -> int:
         plans_dir = Path.cwd() / "plans"
         try:
             if args.plan is not None:
-                return plan_runner.run_plan(args.plan, plans_dir)
+                return plan_runner.run_plan(args.plan, plans_dir,
+                                            items_spec=args.items)
             presets_dir = (
                 SKILL_DIR.parent / "ar2:dgx-comfyui-plan" / "presets"
             )
-            return plan_runner.run_preset(args.preset, presets_dir, plans_dir)
+            return plan_runner.run_preset(args.preset, presets_dir, plans_dir,
+                                          items_spec=args.items)
         except (FileNotFoundError, ValueError) as e:
             print(f"❌ {e}")
             return 1

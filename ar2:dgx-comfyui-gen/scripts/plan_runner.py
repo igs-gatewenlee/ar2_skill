@@ -28,16 +28,25 @@ from workflow_params import inject, WorkflowParamError  # noqa: E402
 import plan_loader  # noqa: E402
 
 
-def run_plan(plan_id: str, plans_dir: Path) -> int:
-    """Entry for `gen --plan {id}`."""
+def run_plan(plan_id: str, plans_dir: Path, items_spec: str | None = None) -> int:
+    """Entry for `gen --plan {id}`. Optional items_spec filters subset."""
     loaded = plan_loader.load_working(plans_dir, plan_id)
+    if items_spec:
+        loaded = plan_loader.filter_items(loaded, items_spec)
     history_path = plans_dir / f"{plan_id}.history.jsonl"
     return _run(loaded, history_path, plans_dir, run_dir_name=plan_id)
 
 
-def run_preset(preset_id: str, presets_dir: Path, plans_dir: Path) -> int:
-    """Entry for `gen --preset {id}`."""
+def run_preset(
+    preset_id: str,
+    presets_dir: Path,
+    plans_dir: Path,
+    items_spec: str | None = None,
+) -> int:
+    """Entry for `gen --preset {id}`. Optional items_spec filters subset."""
     loaded = plan_loader.load_preset(presets_dir, preset_id)
+    if items_spec:
+        loaded = plan_loader.filter_items(loaded, items_spec)
     ts = datetime.datetime.now().astimezone().strftime("%Y%m%dT%H%M%S")
     run_dir_name = f"{preset_id}_{ts}"
     history_dir = plans_dir / "preset_runs"
@@ -146,7 +155,7 @@ def _submit_all(
             patched = inject(
                 workflow_template,
                 prompt=item.final_prompt,
-                negative_prompt=loaded.negative,
+                negative_prompt=(loaded.negative or None),
                 seed=item.seed,
                 steps=loaded.steps,
                 batch_size=1,
@@ -154,6 +163,7 @@ def _submit_all(
                 height=loaded.size[1],
                 face_ref_filename=face_ref_filename,
                 output_subdir=run_dir_name,
+                filename_prefix_override=item.filename_prefix,
             )
         except WorkflowParamError as e:
             print(f"{tag}: inject failed: {e}")
@@ -201,7 +211,18 @@ def _process_prompt(
         return
     for filename, subfolder in files:
         remote = f"{OUTPUT_DIR}/{subfolder}/{filename}".replace("//", "/")
-        local = local_root / filename
+        # Preserve subdir structure under local_root (e.g. ch1/, ch2/ for
+        # chapter-encoded slugs). Strip the run_dir_name prefix that ComfyUI
+        # echoes back in subfolder.
+        rel_sub = subfolder or ""
+        prefix = f"{run_dir_name}/"
+        if rel_sub.startswith(prefix):
+            rel_sub = rel_sub[len(prefix):]
+        elif rel_sub == run_dir_name:
+            rel_sub = ""
+        target_dir = local_root / rel_sub if rel_sub else local_root
+        target_dir.mkdir(parents=True, exist_ok=True)
+        local = target_dir / filename
         try:
             scp_get(remote, local)
         except Exception as e:  # EH-10
@@ -209,7 +230,7 @@ def _process_prompt(
             sub["error"] = f"scp: {e}"
             return
         downloaded.append(str(local))
-        print(f"{tag}: {local.name}")
+        print(f"{tag}: {(rel_sub + '/' if rel_sub else '') + filename}")
 
 
 def _write_history(
