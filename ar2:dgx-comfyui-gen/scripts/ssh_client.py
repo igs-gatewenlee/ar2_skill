@@ -18,6 +18,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # Make sibling-level import work whether called as script or imported.
@@ -75,25 +76,56 @@ def ssh_exec(cmd: str, timeout: int = 30) -> subprocess.CompletedProcess:
     )
 
 
-def scp_get(remote: str, local: str | Path, timeout: int = 120) -> None:
-    """Download a single file from DGX. Raises CalledProcessError on failure."""
+def _scp_with_retry(
+    args: list[str],
+    timeout: int,
+    max_attempts: int = 3,
+    backoff_sec: float = 1.0,
+) -> None:
+    """Run an scp subprocess with linear-backoff retry on transient failures.
+
+    Retries on CalledProcessError or TimeoutExpired up to max_attempts;
+    sleeps backoff_sec * attempt between tries (1s, 2s, ...). Raises the
+    last exception after max_attempts. SSHPassMissing is NOT handled here —
+    callers must run _check_sshpass() first so missing-binary errors fail fast.
+    """
+    for attempt in range(1, max_attempts + 1):
+        try:
+            subprocess.run(args, check=True, capture_output=True, timeout=timeout)
+            return
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            if attempt == max_attempts:
+                raise
+            time.sleep(backoff_sec * attempt)
+
+
+def scp_get(
+    remote: str,
+    local: str | Path,
+    timeout: int = 120,
+    max_attempts: int = 3,
+) -> None:
+    """Download a single file from DGX. Raises on final failure after retries."""
     _check_sshpass()
-    subprocess.run(
+    _scp_with_retry(
         _scp_base() + [f"{USER}@{HOST}:{remote}", str(local)],
-        check=True,
-        capture_output=True,
         timeout=timeout,
+        max_attempts=max_attempts,
     )
 
 
-def scp_put(local: str | Path, remote: str, timeout: int = 120) -> None:
-    """Upload a single file to DGX. Raises CalledProcessError on failure."""
+def scp_put(
+    local: str | Path,
+    remote: str,
+    timeout: int = 120,
+    max_attempts: int = 3,
+) -> None:
+    """Upload a single file to DGX. Raises on final failure after retries."""
     _check_sshpass()
-    subprocess.run(
+    _scp_with_retry(
         _scp_base() + [str(local), f"{USER}@{HOST}:{remote}"],
-        check=True,
-        capture_output=True,
         timeout=timeout,
+        max_attempts=max_attempts,
     )
 
 

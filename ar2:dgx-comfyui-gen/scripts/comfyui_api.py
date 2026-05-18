@@ -7,6 +7,9 @@ Public surface:
 - submit_prompt(workflow, client_id) -> (prompt_id, queue_number, node_errors)
 - wait_for_completion(prompt_id, poll_interval, timeout) -> outputs dict
 - list_output_files(outputs) -> list of (filename, subfolder)
+- get_queue_position(prompt_id) -> int | None
+- get_queue_size() -> tuple[int, int] | None
+- clear_queue() -> bool
 """
 
 from __future__ import annotations
@@ -145,3 +148,31 @@ def get_queue_position(prompt_id: str) -> int | None:
         if len(entry) >= 2 and entry[1] == prompt_id:
             return i + 1
     return None
+
+
+def get_queue_size() -> tuple[int, int] | None:
+    """GET /queue. Returns (pending_count, running_count) or None on error.
+
+    Missing keys default to (0, 0); a non-dict response returns None. Never
+    raises — matches the "do not raise" style of clear_queue/get_queue_position.
+    """
+    try:
+        q = _get_json("/queue")
+    except ComfyUIError:
+        return None
+    try:
+        return len(q.get("queue_pending", [])), len(q.get("queue_running", []))
+    except (AttributeError, TypeError):
+        return None
+
+
+def clear_queue() -> bool:
+    """POST /queue {clear: true}. Returns True on success, False on error.
+
+    Does NOT raise — caller decides whether to abort or continue.
+    """
+    try:
+        _post_json("/queue", {"clear": True})
+        return True
+    except ComfyUIError:
+        return False

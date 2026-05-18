@@ -4,7 +4,9 @@ Loads plan, expands items, submits all to ComfyUI in single SSH session
 (12-zodiac verified pattern), polls outputs, SCPs back, writes history.jsonl.
 
 EH-7  ComfyUI rejects single item → record items_failed, continue.
-EH-10 SCP single failure → record, continue.
+EH-10 SCP single failure → record, continue (ssh_client now retries
+      transient errors internally before raising).
+EH-12 Queue pre-clear API failure → log warning, continue (best-effort).
 BC-17 Exit codes: 0 = all OK, 1 = SSH conn failure, 2 = workflow rejected
       (the whole batch can't even submit), 3 = partial failure.
 EH-9  Ctrl-C during polling → detach, training continues on DGX.
@@ -74,6 +76,11 @@ def _run(
     print("Ensuring SSH tunnel...", flush=True)
     ensure_tunnel()
 
+    # EH-12: best-effort clear any stale queue items from a previous run
+    # before starting this batch. Placement note: before _upload_face_ref so
+    # face_ref upload failure doesn't waste a queue-clear cycle.
+    _clear_stale_queue()
+
     # R-2 code fix: upload face_ref once before batch submit
     face_ref_filename = _upload_face_ref(loaded.face_ref, run_dir_name)
 
@@ -114,6 +121,26 @@ def _run(
     # BC-17 exit code
     failed = len(loaded.items) - len(downloaded)
     return 3 if failed > 0 else 0
+
+
+def _clear_stale_queue() -> None:
+    """EH-12: best-effort clear of any pending+running ComfyUI items.
+
+    If /queue check or POST fails, log a warning and continue. Never raises —
+    queue cleanup is a courtesy, not a correctness requirement.
+    """
+    size = api.get_queue_size()
+    if size is None:
+        print("⚠️  queue check failed, skipping pre-clear", flush=True)
+        return
+    pending, running = size
+    total = pending + running
+    if total == 0:
+        return
+    print(f"⚠️  Found {total} stale queue items ({pending} pending, "
+          f"{running} running), clearing...", flush=True)
+    if not api.clear_queue():
+        print("⚠️  queue clear POST failed, continuing anyway", flush=True)
 
 
 def _upload_face_ref(face_ref_local: str | None, run_dir_name: str) -> str | None:
