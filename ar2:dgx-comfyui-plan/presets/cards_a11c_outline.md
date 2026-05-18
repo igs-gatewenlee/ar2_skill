@@ -3,9 +3,9 @@ id: cards_a11c
 title: 奇幻冒險卡冊 — Fantasy Adventure Card Set (5 chapters × 12)
 version: 1
 created: '2026-05-16T18:13:41+08:00'
-updated: '2026-05-17T09:54:11+08:00'
+updated: '2026-05-18T11:27:19+08:00'
 status: ready
-workflow: flux_basic
+workflow: flux_pulid
 size:
 - 512
 - 512
@@ -16,18 +16,19 @@ seed_strategy:
   base: 1000
   step: 137
 lora: []
-face_ref: null
-description: 5-chapter fantasy adventure card set, 60 cards, Disney Pixar 3D style,
-  12-year-old hero's journey
+face_ref: <set face_ref locally>
+description: 5-chapter Pixar 3D fantasy adventure (60 cards) with PuLID character
+  consistency. Set face_ref locally before use.
 tags:
 - fantasy
 - adventure
 - pixar
+- pulid
 - 5-chapters
 - card-set
 provenance:
   original_id: cards_a11c
-promoted: '2026-05-17T09:54:11+08:00'
+promoted: '2026-05-18T11:27:19+08:00'
 ---
 
 # Story / Vision
