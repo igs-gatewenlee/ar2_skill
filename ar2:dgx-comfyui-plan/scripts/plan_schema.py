@@ -37,6 +37,12 @@ _REQUIRED_FRONTMATTER = {
     "batch_per_item", "seed_strategy",
 }
 _VALID_STATUS = {"planning", "ready", "done"}
+# pulid_weight bounds: 0.0 is a defined value-write (DR-4 — we do not
+# claim "PuLID off"). 3.0 is a conservative upper buffer (by-design,
+# no A-grade ComfyUI ApplyPulidFlux upstream evidence; revisit if a
+# counter-example surfaces).
+_PULID_WEIGHT_MIN = 0.0
+_PULID_WEIGHT_MAX = 3.0
 _REQUIRED_SECTIONS = [
     "# Story / Vision",
     "# Style anchor",
@@ -77,6 +83,7 @@ class Plan:
     # Optional frontmatter
     lora: list[dict] = field(default_factory=list)
     face_ref: str | None = None
+    pulid_weight: float | None = None
     description: str | None = None
     tags: list[str] = field(default_factory=list)
     provenance: dict | None = None
@@ -249,6 +256,26 @@ def _split_sections(body: str, path: Path) -> dict[str, str]:
     return sections
 
 
+def _parse_pulid_weight(value) -> float | None:
+    """Optional pulid_weight: None / absent → None; else float in [0.0, 3.0].
+
+    Raises ValueError early (at plan-load) on non-numeric or out-of-range
+    input so the failure does not surface at DGX submission time.
+    """
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"pulid_weight must be numeric, got {value!r}") from e
+    if not (_PULID_WEIGHT_MIN <= v <= _PULID_WEIGHT_MAX):
+        raise ValueError(
+            f"pulid_weight {v} out of range "
+            f"[{_PULID_WEIGHT_MIN}, {_PULID_WEIGHT_MAX}]"
+        )
+    return v
+
+
 def _build_plan(fm: dict, sections: dict[str, str], path: Path) -> Plan:
     style = sections["# Style anchor"]
     out_block = sections["# Output"]
@@ -266,6 +293,7 @@ def _build_plan(fm: dict, sections: dict[str, str], path: Path) -> Plan:
         seed_strategy=dict(fm["seed_strategy"]),
         lora=list(fm.get("lora") or []),
         face_ref=fm.get("face_ref"),
+        pulid_weight=_parse_pulid_weight(fm.get("pulid_weight")),
         description=fm.get("description"),
         tags=list(fm.get("tags") or []),
         provenance=fm.get("provenance"),
@@ -388,6 +416,7 @@ def _plan_to_frontmatter(plan: Plan) -> dict[str, Any]:
     }
     # Conditional optional fields (omitted from YAML when unset).
     optional = {
+        "pulid_weight": plan.pulid_weight,
         "description": plan.description,
         "tags": plan.tags or None,
         "provenance": plan.provenance,

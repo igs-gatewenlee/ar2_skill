@@ -88,6 +88,7 @@ def inject(
     width: int | None = None,
     height: int | None = None,
     face_ref_filename: str | None = None,
+    pulid_weight: float | None = None,
     output_subdir: str | None = None,
     filename_prefix_override: str | None = None,
     deep_copy: bool = True,
@@ -161,6 +162,16 @@ def inject(
                     "no second CLIPTextEncode for negative_prompt"
                 )
             encoders[1][1]["inputs"]["text"] = negative_prompt
+
+    # --- pulid_weight / ApplyPulidFlux ---
+    if pulid_weight is not None:
+        pulid_nodes = _find_nodes_by_class(wf, "ApplyPulidFlux")
+        if not pulid_nodes:
+            raise WorkflowParamError(
+                "pulid_weight given but no ApplyPulidFlux node in workflow"
+            )
+        for _nid, node in pulid_nodes:
+            node["inputs"]["weight"] = float(pulid_weight)
 
     # --- face_ref / LoadImage ---
     if face_ref_filename is not None:

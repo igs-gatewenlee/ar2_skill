@@ -189,6 +189,7 @@ def _submit_all(
                 width=loaded.size[0],
                 height=loaded.size[1],
                 face_ref_filename=face_ref_filename,
+                pulid_weight=loaded.pulid_weight,
                 output_subdir=run_dir_name,
                 filename_prefix_override=item.filename_prefix,
             )

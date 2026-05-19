@@ -39,6 +39,7 @@ class LoadedPlan:
     steps: int
     lora: list[dict]
     face_ref: str | None
+    pulid_weight: float | None
     negative: str
     output_dir: str
     mode: str  # "plan" | "preset"
@@ -112,6 +113,7 @@ def _load(path: Path, *, mode: str) -> LoadedPlan:
         steps=plan.steps,
         lora=plan.lora,
         face_ref=plan.face_ref,
+        pulid_weight=plan.pulid_weight,
         negative=_resolve_negative(plan.style_negative),
         output_dir=plan.output_dir,
         mode=mode,

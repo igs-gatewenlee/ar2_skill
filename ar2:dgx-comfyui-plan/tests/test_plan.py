@@ -310,6 +310,98 @@ class TestSanitize(unittest.TestCase):
         )
 
 
+# ---------- pulid_weight (issue #4) ----------
+
+
+class TestPulidWeightParse(unittest.TestCase):
+    """Covers _parse_pulid_weight BC-1/2/3, EH-1/2/3 from P1 spec."""
+
+    def test_none_passthrough(self):
+        """BC-1: missing key → None."""
+        self.assertIsNone(ps._parse_pulid_weight(None))
+
+    def test_valid_float(self):
+        """BC-2: in-range float → float."""
+        self.assertEqual(ps._parse_pulid_weight(0.9), 0.9)
+
+    def test_int_coerced_to_float(self):
+        """BC-2: int 1 → 1.0 (numeric tolerance)."""
+        self.assertEqual(ps._parse_pulid_weight(1), 1.0)
+
+    def test_min_boundary(self):
+        """BC-7: 0.0 is valid (boundary)."""
+        self.assertEqual(ps._parse_pulid_weight(0.0), 0.0)
+
+    def test_max_boundary(self):
+        """3.0 is valid (boundary)."""
+        self.assertEqual(ps._parse_pulid_weight(3.0), 3.0)
+
+    def test_string_input_raises(self):
+        """EH-1: non-numeric → ValueError."""
+        with self.assertRaisesRegex(ValueError, "numeric"):
+            ps._parse_pulid_weight("abc")
+
+    def test_negative_raises(self):
+        """EH-2: < 0.0 → out-of-range ValueError."""
+        with self.assertRaisesRegex(ValueError, "out of range"):
+            ps._parse_pulid_weight(-0.1)
+
+    def test_over_max_raises(self):
+        """EH-3: > 3.0 → out-of-range ValueError."""
+        with self.assertRaisesRegex(ValueError, "out of range"):
+            ps._parse_pulid_weight(3.5)
+
+
+class TestPulidWeightRoundTrip(unittest.TestCase):
+    """R-1 fix: pulid_weight must survive parse → serialize → parse.
+
+    Round-trip coverage prevents the silent-drop regression where promote /
+    from-preset would lose the field during YAML re-emission.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.tpl = (ROOT / "templates" / "default_outline.md").read_text()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _write_plan_with_weight(self, weight_yaml_line: str) -> Path:
+        """Drop a custom pulid_weight line into the default outline template."""
+        text = self.tpl.replace(
+            "face_ref: null\n",
+            f"face_ref: null\n{weight_yaml_line}\n",
+        )
+        path = self.tmp / "test.md"
+        path.write_text(text)
+        return path
+
+    def test_serialized_yaml_contains_pulid_weight(self):
+        """Set value → serialize → YAML body contains pulid_weight."""
+        path = self._write_plan_with_weight("pulid_weight: 0.7")
+        plan = ps.parse(path)
+        self.assertEqual(plan.pulid_weight, 0.7)
+        yaml_text = ps.serialize(plan)
+        self.assertIn("pulid_weight", yaml_text)
+        self.assertIn("0.7", yaml_text)
+
+    def test_round_trip_preserves_value(self):
+        """parse → serialize → parse keeps the same pulid_weight."""
+        path = self._write_plan_with_weight("pulid_weight: 1.5")
+        plan = ps.parse(path)
+        round_trip = self.tmp / "round_trip.md"
+        round_trip.write_text(ps.serialize(plan))
+        plan_again = ps.parse(round_trip)
+        self.assertEqual(plan_again.pulid_weight, 1.5)
+
+    def test_round_trip_none_stays_none(self):
+        """Unset pulid_weight stays unset after round-trip (no spurious key)."""
+        plan = ps.parse(ROOT / "templates" / "default_outline.md")
+        self.assertIsNone(plan.pulid_weight)
+        yaml_text = ps.serialize(plan)
+        self.assertNotIn("pulid_weight", yaml_text)
+
+
 # ---------- Loader / IF-3 ----------
 
 
