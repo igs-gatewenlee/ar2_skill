@@ -136,8 +136,73 @@ def _skill_display(data: OverviewData) -> tuple[str, str]:
     return emoji, name
 
 
+def _topo_levels(
+    workflow_skills: list[OverviewData],
+) -> list[list[OverviewData]]:
+    """Kahn topological sort grouped into levels (DAG renderer support).
+
+    Edges are built as the **union** of each skill's `upstream` and the
+    inverse of every other skill's `downstream` — either side may
+    declare an edge and both views are honored. Unknown skill names in
+    the metadata are ignored (defensive against typos / cross-batch
+    references) rather than raised — keeps the visualization resilient.
+
+    Within each level, results are ordered by `(order, name)` so the
+    rendered HTML stays deterministic. Level 0 may contain N roots
+    (e.g. check + plan side-by-side).
+
+    Raises:
+        ValueError: cycle detected in the DAG (incl. self-edges). The
+            ar2:* family is acyclic by design; this is a safety guard.
+    """
+    if not workflow_skills:
+        return []
+
+    name_to_data = {d.skill.name: d for d in workflow_skills}
+
+    # Build edge set (upstream → skill) as unique pairs. The `or []` guards
+    # against an explicit `None` in metadata (yaml `upstream:` with no value).
+    edges: set[tuple[str, str]] = set()
+    for d in workflow_skills:
+        skill_name = d.skill.name
+        for up in d.meta.get("upstream") or []:
+            if up in name_to_data:
+                edges.add((up, skill_name))
+        for down in d.meta.get("downstream") or []:
+            if down in name_to_data:
+                edges.add((skill_name, down))
+
+    # Reject self-loops up-front (clearer error than cycle-via-Kahn-residue).
+    self_loop = next((a for a, b in edges if a == b), None)
+    if self_loop is not None:
+        raise ValueError(f"self-edge in skill DAG: {self_loop}")
+
+    in_degree: dict[str, int] = dict.fromkeys(name_to_data, 0)
+    children: dict[str, list[str]] = {n: [] for n in name_to_data}
+    for src, dst in edges:
+        in_degree[dst] += 1
+        children[src].append(dst)
+
+    levels: list[list[OverviewData]] = []
+    remaining = dict(in_degree)
+    while remaining:
+        layer_names = [n for n, deg in remaining.items() if deg == 0]
+        if not layer_names:
+            raise ValueError("cycle detected in skill DAG")
+        levels.append(sorted(
+            (name_to_data[n] for n in layer_names), key=_sort_key
+        ))
+        for n in layer_names:
+            del remaining[n]
+            for c in children[n]:
+                if c in remaining:
+                    remaining[c] -= 1
+
+    return levels
+
+
 def _render_pipeline(workflow_skills: list[OverviewData]) -> str:
-    """BC-7: linear pipeline (left → right) of workflow skills, with arrows between."""
+    """DAG pipeline: topological levels stacked vertically, ↓ between levels."""
     if not workflow_skills:
         return '<p class="subtitle">（尚無 workflow 類型 skill）</p>'
 
@@ -150,7 +215,12 @@ def _render_pipeline(workflow_skills: list[OverviewData]) -> str:
             f'</a>'
         )
 
-    inner = '<div class="pipeline-arrow">→</div>'.join(node(d) for d in workflow_skills)
+    levels = _topo_levels(workflow_skills)
+    level_html = [
+        '<div class="pipeline-level">' + "".join(node(d) for d in lvl) + "</div>"
+        for lvl in levels
+    ]
+    inner = '<div class="pipeline-down-arrow">↓</div>'.join(level_html)
     return f'<div class="pipeline">{inner}</div>'
 
 
