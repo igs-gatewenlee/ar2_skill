@@ -56,6 +56,63 @@ _ITEMS_HEADER_RE = re.compile(
 )
 _TABLE_SEP_RE = re.compile(r"^\|[\s\-:]+\|[\s\-:]+\|[\s\-:]+\|[\s\-:]+\|\s*$")
 
+# Design Dimensions section header (optional section, BC-1).
+_DESIGN_DIMENSIONS_HEADER = "# Design Dimensions"
+# Layer A: 9 visual dimensions whitelist (EH-2b).
+_LAYER_A_DIMENSION_NAMES = (
+    "hair", "outfit", "composition", "background", "lighting",
+    "expression", "style_intensity", "view_angle", "color_palette",
+)
+# Layer A: scope enum (EH-2). per_item removed per DR-1; per-item variation
+# uses manual override (item.prompt as a literal string, not "<derived>").
+_SCOPE_VALUES = {"locked", "per_group", "unspecified"}
+# Layer B: grouping_axis enum (EH-3).
+_GROUPING_AXIS_VALUES = {"rarity", "chapter", "custom"}
+# YAML top-level keys inside Design Dimensions section.
+_DD_KEY_LAYER_B = "season_structure"
+_DD_KEY_LAYER_C = "narrative_direction"
+_DD_KEY_LAYER_A = "visual_lock"
+
+
+@dataclass
+class Dimension:
+    """Layer A 維度的單一欄位 (value + scope)."""
+    value: str | None
+    scope: str  # locked | per_group | unspecified
+
+
+@dataclass
+class LayerA:
+    """Visual Lock — 9 維度視覺鎖定 (BC-4)."""
+    hair: Dimension
+    outfit: Dimension
+    composition: Dimension
+    background: Dimension
+    lighting: Dimension
+    expression: Dimension
+    style_intensity: Dimension
+    view_angle: Dimension
+    color_palette: Dimension
+
+
+@dataclass
+class LayerB:
+    """Season Structure — 季結構 (BC-5)."""
+    theme: str
+    grouping_axis: str
+    groups: dict[str, dict[str, Any]]
+    cross_group_progression: dict[str, dict[str, str]] | None = None
+    character_continuity: str | None = None
+    acceptance: str | None = None
+
+
+@dataclass
+class LayerC:
+    """Narrative Direction — 敘事方向. chat-driven 引導用、不直接進 prompt (DR-6)."""
+    character_seed: str
+    group_arc: dict[str, str]
+    emotion_palette: str | None = None
+
 
 @dataclass
 class Item:
@@ -97,6 +154,10 @@ class Plan:
     output_naming: str = ""
     items: list[Item] = field(default_factory=list)
     open_notes: str = ""
+    # Design Dimensions (BC-1, optional — None when section absent).
+    layer_b: LayerB | None = None
+    layer_c: LayerC | None = None
+    layer_a: LayerA | None = None
 
 
 _ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
@@ -279,6 +340,12 @@ def _parse_pulid_weight(value) -> float | None:
 def _build_plan(fm: dict, sections: dict[str, str], path: Path) -> Plan:
     style = sections["# Style anchor"]
     out_block = sections["# Output"]
+    # Design Dimensions section is optional (BC-1).
+    dimensions_text = sections.get(_DESIGN_DIMENSIONS_HEADER)
+    if dimensions_text and dimensions_text.strip():
+        layer_b, layer_c, layer_a = _parse_design_dimensions(dimensions_text, path)
+    else:
+        layer_b, layer_c, layer_a = (None, None, None)
     return Plan(
         id=fm["id"],
         title=fm["title"],
@@ -306,6 +373,9 @@ def _build_plan(fm: dict, sections: dict[str, str], path: Path) -> Plan:
         output_naming=_extract_output(out_block, "naming") or "",
         items=_parse_items_table(sections["# Items"], path),
         open_notes=sections["# Open notes"],
+        layer_b=layer_b,
+        layer_c=layer_c,
+        layer_a=layer_a,
     )
 
 
@@ -429,10 +499,17 @@ def _plan_to_frontmatter(plan: Plan) -> dict[str, Any]:
 
 
 def _plan_to_body(plan: Plan) -> str:
+    # Design Dimensions section is optional (BC-2): only emit when any layer
+    # has meaningful content. "All-None / all-unspecified" → omit (BC-3b).
+    dimensions_section = _design_dimensions_to_body(plan)
     lines = [
         "# Story / Vision",
         plan.story_vision or "(empty)",
         "",
+    ]
+    if dimensions_section:
+        lines.extend([dimensions_section, ""])
+    lines.extend([
         "# Style anchor",
         f"**Prefix**: {plan.style_prefix}",
         f"**Suffix**: {plan.style_suffix}",
@@ -445,7 +522,7 @@ def _plan_to_body(plan: Plan) -> str:
         "# Items",
         "| # | slug | prompt | full? |",
         "|---|------|--------|-------|",
-    ]
+    ])
     for i, item in enumerate(plan.items, start=1):
         prompt_esc = item.prompt.replace("|", r"\|")
         full_mark = "✓" if item.full else ""
@@ -456,3 +533,213 @@ def _plan_to_body(plan: Plan) -> str:
         plan.open_notes or "(empty)",
     ])
     return "\n".join(lines) + "\n"
+
+
+# ---------- Design Dimensions: parse / serialize ----------
+
+
+def _parse_design_dimensions(
+    text: str, path: Path
+) -> tuple[LayerB | None, LayerC | None, LayerA | None]:
+    """Parse `# Design Dimensions` section text → (LayerB, LayerC, LayerA).
+
+    Accepts bare YAML or YAML wrapped in a ```yaml ... ``` fence.
+    Missing top-level layer key → that layer is None.
+    Missing Layer A dim → default Dimension(None, "unspecified") (BC-4).
+    """
+    yaml_text = _strip_yaml_fence(text)
+    try:
+        data = yaml.safe_load(yaml_text) or {}
+    except yaml.YAMLError as e:
+        raise ValueError(
+            f"EH-1: {path}: Design Dimensions YAML parse failed: {e}"
+        ) from e
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"EH-1: {path}: Design Dimensions must be a YAML mapping, "
+            f"got {type(data).__name__}"
+        )
+    layer_b = _layer_b_from_dict(data.get(_DD_KEY_LAYER_B), path)
+    layer_c = _layer_c_from_dict(data.get(_DD_KEY_LAYER_C), path)
+    layer_a = _layer_a_from_dict(data.get(_DD_KEY_LAYER_A), path)
+    return layer_b, layer_c, layer_a
+
+
+def _strip_yaml_fence(text: str) -> str:
+    """Strip ```yaml ... ``` (or generic ```) fence if present."""
+    s = text.strip()
+    if not s.startswith("```"):
+        return text
+    lines = s.splitlines()
+    if len(lines) < 2 or lines[-1].strip() != "```":
+        return text
+    return "\n".join(lines[1:-1])
+
+
+def _require_mapping(data: Any, label: str, path: Path) -> dict:
+    """Shared guard: None passes through (caller returns None); non-dict raises EH-1."""
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"EH-1: {path}: {label} must be a mapping, "
+            f"got {type(data).__name__}"
+        )
+    return data
+
+
+def _layer_b_from_dict(data: Any, path: Path) -> LayerB | None:
+    if data is None:
+        return None
+    data = _require_mapping(data, _DD_KEY_LAYER_B, path)
+    grouping_axis = data.get("grouping_axis", "")
+    if not grouping_axis:
+        # R-3 fix: grouping_axis is required when season_structure is present.
+        raise ValueError(
+            f"EH-3: {path}: grouping_axis is required for "
+            f"{_DD_KEY_LAYER_B}, must be one of {sorted(_GROUPING_AXIS_VALUES)}"
+        )
+    if grouping_axis not in _GROUPING_AXIS_VALUES:
+        raise ValueError(
+            f"EH-3: {path}: grouping_axis must be one of "
+            f"{sorted(_GROUPING_AXIS_VALUES)}, got {grouping_axis!r}"
+        )
+    return LayerB(
+        theme=str(data.get("theme", "")),
+        grouping_axis=str(grouping_axis),
+        groups=dict(data.get("groups") or {}),
+        cross_group_progression=data.get("cross_group_progression"),
+        character_continuity=data.get("character_continuity"),
+        acceptance=data.get("acceptance"),
+    )
+
+
+def _layer_c_from_dict(data: Any, path: Path) -> LayerC | None:
+    if data is None:
+        return None
+    data = _require_mapping(data, _DD_KEY_LAYER_C, path)
+    return LayerC(
+        character_seed=str(data.get("character_seed", "")),
+        group_arc=dict(data.get("group_arc") or {}),
+        emotion_palette=data.get("emotion_palette"),
+    )
+
+
+def _layer_a_from_dict(data: Any, path: Path) -> LayerA | None:
+    if data is None:
+        return None
+    data = _require_mapping(data, _DD_KEY_LAYER_A, path)
+    # EH-2b: reject unknown dim keys.
+    unknown = set(data.keys()) - set(_LAYER_A_DIMENSION_NAMES)
+    if unknown:
+        raise ValueError(
+            f"EH-2b: {path}: unknown dimension(s) {sorted(unknown)}, "
+            f"expected one of {list(_LAYER_A_DIMENSION_NAMES)}"
+        )
+    dims = {
+        name: _dimension_from_dict(name, data.get(name), path)
+        for name in _LAYER_A_DIMENSION_NAMES
+    }
+    return LayerA(**dims)
+
+
+def _dimension_from_dict(name: str, data: Any, path: Path) -> Dimension:
+    """Missing dim → default unspecified (BC-4)."""
+    if data is None:
+        return Dimension(value=None, scope="unspecified")
+    data = _require_mapping(data, f"dimension {name}", path)
+    has_scope = "scope" in data
+    scope = data.get("scope", "unspecified")
+    if scope not in _SCOPE_VALUES:
+        raise ValueError(
+            f"EH-2: {path}: dimension {name} has invalid scope {scope!r}, "
+            f"expected one of {sorted(_SCOPE_VALUES)}"
+        )
+    value = data.get("value")
+    # R-6 fix: setting value without explicit scope is ambiguous (user might
+    # mean "locked" but get silent "unspecified" default which discards value).
+    if value is not None and not has_scope:
+        raise ValueError(
+            f"EH-2: {path}: dimension {name} has value={value!r} but no "
+            f"explicit `scope` key — scope must be specified explicitly when "
+            f"value is set"
+        )
+    # R-4 fix: normalize — scope=unspecified can never carry a meaningful value.
+    if scope == "unspecified":
+        value = None
+    return Dimension(
+        value=str(value) if value is not None else None,
+        scope=scope,
+    )
+
+
+def _design_dimensions_to_body(plan: Plan) -> str:
+    """Serialize layer_b/c/a → `# Design Dimensions` section.
+
+    Returns "" when all three layers are effectively empty (BC-3b normalize):
+    layer_b/c are None and layer_a is None or all dimensions unspecified.
+    """
+    if _all_layers_empty(plan):
+        return ""
+    body: dict[str, Any] = {}
+    if plan.layer_b is not None:
+        body[_DD_KEY_LAYER_B] = _layer_b_to_dict(plan.layer_b)
+    if plan.layer_c is not None:
+        body[_DD_KEY_LAYER_C] = _layer_c_to_dict(plan.layer_c)
+    if plan.layer_a is not None and not layer_a_is_empty(plan.layer_a):
+        body[_DD_KEY_LAYER_A] = _layer_a_to_dict(plan.layer_a)
+    yaml_text = yaml.safe_dump(body, allow_unicode=True, sort_keys=False)
+    return f"{_DESIGN_DIMENSIONS_HEADER}\n\n```yaml\n{yaml_text}```"
+
+
+def _all_layers_empty(plan: Plan) -> bool:
+    """True iff layer_b/c are None and layer_a is None-or-all-unspecified."""
+    if plan.layer_b is not None or plan.layer_c is not None:
+        return False
+    return plan.layer_a is None or layer_a_is_empty(plan.layer_a)
+
+
+def layer_a_is_empty(la: LayerA) -> bool:
+    """True if all 9 dimensions are scope=unspecified."""
+    return all(
+        getattr(la, name).scope == "unspecified"
+        for name in _LAYER_A_DIMENSION_NAMES
+    )
+
+
+def _layer_b_to_dict(lb: LayerB) -> dict[str, Any]:
+    d: dict[str, Any] = {
+        "theme": lb.theme,
+        "grouping_axis": lb.grouping_axis,
+        "groups": lb.groups,
+    }
+    if lb.cross_group_progression is not None:
+        d["cross_group_progression"] = lb.cross_group_progression
+    if lb.character_continuity is not None:
+        d["character_continuity"] = lb.character_continuity
+    if lb.acceptance is not None:
+        d["acceptance"] = lb.acceptance
+    return d
+
+
+def _layer_c_to_dict(lc: LayerC) -> dict[str, Any]:
+    d: dict[str, Any] = {
+        "character_seed": lc.character_seed,
+        "group_arc": lc.group_arc,
+    }
+    if lc.emotion_palette is not None:
+        d["emotion_palette"] = lc.emotion_palette
+    return d
+
+
+def _layer_a_to_dict(la: LayerA) -> dict[str, Any]:
+    """Serialize Layer A. R-4 fix: skip all dims with scope=unspecified
+    (whether or not value is set — unspecified can never carry value)."""
+    out: dict[str, Any] = {}
+    for name in _LAYER_A_DIMENSION_NAMES:
+        dim: Dimension = getattr(la, name)
+        if dim.scope == "unspecified":
+            continue
+        entry: dict[str, Any] = {"scope": dim.scope}
+        if dim.value is not None:
+            entry["value"] = dim.value
+        out[name] = entry
+    return out

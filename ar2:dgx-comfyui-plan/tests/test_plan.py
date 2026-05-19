@@ -432,5 +432,396 @@ class TestLoaderExpand(unittest.TestCase):
         self.assertEqual(len(list(gen)), 5)
 
 
+# ============================================================
+# Design Dimensions tests (BC-1/2/3a/3b/4/5/6/14 + EH-1/2/2b/3)
+# ============================================================
+
+
+_DD_SECTION_FULL = """\
+# Design Dimensions
+
+```yaml
+season_structure:
+  theme: 奇幻冒險
+  grouping_axis: chapter
+  groups:
+    ch1: {count: 12, label: 啟程}
+    ch2: {count: 12, label: 試煉}
+  cross_group_progression:
+    composition:
+      ch1: half_body
+      ch2: full_body
+  character_continuity: brown_braids_girl
+  acceptance: 每張需明確敘事節點
+
+narrative_direction:
+  character_seed: 12 歲女孩,棕髮辮子
+  group_arc:
+    ch1: 離家啟程
+    ch2: 森林精靈導師
+  emotion_palette: 希望 + 冒險
+
+visual_lock:
+  hair:
+    value: 棕色辮子
+    scope: locked
+  outfit:
+    value: 皮製旅行斗篷
+    scope: locked
+  composition:
+    scope: per_group
+  background:
+    scope: per_group
+  lighting:
+    value: 自然光
+    scope: locked
+  expression:
+    scope: unspecified
+  style_intensity:
+    value: Pixar 3D
+    scope: locked
+  view_angle:
+    scope: unspecified
+  color_palette:
+    value: 暖色系
+    scope: locked
+```
+"""
+
+
+def _outline_with_dd(template: str, dd_section: str = _DD_SECTION_FULL) -> str:
+    """Inject Design Dimensions between Story/Vision and Style anchor."""
+    return template.replace("# Style anchor", f"{dd_section}\n# Style anchor", 1)
+
+
+class TestDesignDimensionsParse(unittest.TestCase):
+    """BC-1: parse Design Dimensions section → layer_b/c/a."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.tpl = (ROOT / "templates" / "default_outline.md").read_text()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _fill(self) -> str:
+        return (self.tpl
+                .replace("PLACEHOLDER_ID", "dd_test")
+                .replace("PLACEHOLDER_TITLE", "dd smoke")
+                .replace("PLACEHOLDER_CREATED", ps.now_iso())
+                .replace("PLACEHOLDER_UPDATED", ps.now_iso()))
+
+    def _write(self, name: str, content: str) -> Path:
+        p = self.tmp / name
+        p.write_text(content)
+        return p
+
+    def test_bc1_parse_full_dd(self):
+        """BC-1: full Design Dimensions section → all 3 layers populated."""
+        outline = _outline_with_dd(self._fill())
+        p = self._write("dd_test_outline.md", outline)
+        plan = ps.parse(p)
+        self.assertIsNotNone(plan.layer_b)
+        self.assertIsNotNone(plan.layer_c)
+        self.assertIsNotNone(plan.layer_a)
+        self.assertEqual(plan.layer_b.theme, "奇幻冒險")
+        self.assertEqual(plan.layer_b.grouping_axis, "chapter")
+        self.assertEqual(plan.layer_c.character_seed, "12 歲女孩,棕髮辮子")
+        self.assertEqual(plan.layer_a.hair.value, "棕色辮子")
+        self.assertEqual(plan.layer_a.hair.scope, "locked")
+        self.assertEqual(plan.layer_a.expression.scope, "unspecified")
+        self.assertIsNone(plan.layer_a.expression.value)
+
+    def test_bc1_no_dd_section(self):
+        """BC-1: no Design Dimensions section → all 3 layers None."""
+        p = self._write("nodd_outline.md", self._fill())
+        plan = ps.parse(p)
+        self.assertIsNone(plan.layer_b)
+        self.assertIsNone(plan.layer_c)
+        self.assertIsNone(plan.layer_a)
+
+    def test_bc4_missing_dim_defaults_unspecified(self):
+        """BC-4: Layer A 缺欄位 → 該維度為 Dimension(None, 'unspecified')."""
+        partial = """\
+# Design Dimensions
+
+```yaml
+visual_lock:
+  hair:
+    value: short
+    scope: locked
+```
+"""
+        outline = _outline_with_dd(self._fill(), partial)
+        p = self._write("partial_outline.md", outline)
+        plan = ps.parse(p)
+        self.assertIsNotNone(plan.layer_a)
+        self.assertEqual(plan.layer_a.hair.value, "short")
+        self.assertEqual(plan.layer_a.outfit.scope, "unspecified")
+        self.assertIsNone(plan.layer_a.outfit.value)
+        # 8 of 9 dims default unspecified
+        unspec = sum(
+            1 for n in ps._LAYER_A_DIMENSION_NAMES
+            if getattr(plan.layer_a, n).scope == "unspecified"
+        )
+        self.assertEqual(unspec, 8)
+
+
+class TestDesignDimensionsErrors(unittest.TestCase):
+    """EH-1, EH-2, EH-2b, EH-3."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.tpl = (ROOT / "templates" / "default_outline.md").read_text()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _fill(self) -> str:
+        return (self.tpl
+                .replace("PLACEHOLDER_ID", "eh_test")
+                .replace("PLACEHOLDER_TITLE", "eh")
+                .replace("PLACEHOLDER_CREATED", ps.now_iso())
+                .replace("PLACEHOLDER_UPDATED", ps.now_iso()))
+
+    def _write(self, name: str, content: str) -> Path:
+        p = self.tmp / name
+        p.write_text(content)
+        return p
+
+    def test_eh1_invalid_yaml(self):
+        """EH-1: malformed YAML in Design Dimensions."""
+        bad = "# Design Dimensions\n\n```yaml\nseason_structure: [unclosed\n```\n"
+        outline = _outline_with_dd(self._fill(), bad)
+        p = self._write("bad.md", outline)
+        with self.assertRaisesRegex(ValueError, "EH-1.*Design Dimensions"):
+            ps.parse(p)
+
+    def test_eh1_non_mapping(self):
+        """EH-1: Design Dimensions root not a mapping."""
+        bad = "# Design Dimensions\n\n```yaml\n- just a list\n- of items\n```\n"
+        outline = _outline_with_dd(self._fill(), bad)
+        p = self._write("bad.md", outline)
+        with self.assertRaisesRegex(ValueError, "EH-1.*mapping"):
+            ps.parse(p)
+
+    def test_eh2_invalid_scope(self):
+        """EH-2: invalid scope value."""
+        bad = """\
+# Design Dimensions
+
+```yaml
+visual_lock:
+  hair:
+    scope: bogus_scope
+```
+"""
+        outline = _outline_with_dd(self._fill(), bad)
+        p = self._write("bad.md", outline)
+        with self.assertRaisesRegex(ValueError, "EH-2.*invalid scope"):
+            ps.parse(p)
+
+    def test_eh2b_unknown_dimension(self):
+        """EH-2b: unknown dimension name."""
+        bad = """\
+# Design Dimensions
+
+```yaml
+visual_lock:
+  not_a_real_dim:
+    scope: locked
+```
+"""
+        outline = _outline_with_dd(self._fill(), bad)
+        p = self._write("bad.md", outline)
+        with self.assertRaisesRegex(ValueError, "EH-2b.*unknown dimension"):
+            ps.parse(p)
+
+    def test_eh3_invalid_grouping_axis(self):
+        """EH-3: grouping_axis not in enum."""
+        bad = """\
+# Design Dimensions
+
+```yaml
+season_structure:
+  theme: x
+  grouping_axis: invalid_axis
+  groups: {}
+```
+"""
+        outline = _outline_with_dd(self._fill(), bad)
+        p = self._write("bad.md", outline)
+        with self.assertRaisesRegex(ValueError, "EH-3.*grouping_axis"):
+            ps.parse(p)
+
+    def test_eh2_value_without_explicit_scope(self):
+        """R-6: dim 填 value 但無 explicit scope key → EH-2."""
+        bad = """\
+# Design Dimensions
+
+```yaml
+visual_lock:
+  hair:
+    value: brown
+```
+"""
+        outline = _outline_with_dd(self._fill(), bad)
+        p = self._write("bad.md", outline)
+        with self.assertRaisesRegex(ValueError, "EH-2.*scope must be specified"):
+            ps.parse(p)
+
+
+class TestDesignDimensionsRoundTrip(unittest.TestCase):
+    """BC-3a (行為等價) + BC-3b (序列化對稱、4 狀態)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.tpl = (ROOT / "templates" / "default_outline.md").read_text()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _fill(self) -> str:
+        return (self.tpl
+                .replace("PLACEHOLDER_ID", "rt_test")
+                .replace("PLACEHOLDER_TITLE", "rt")
+                .replace("PLACEHOLDER_CREATED", ps.now_iso())
+                .replace("PLACEHOLDER_UPDATED", ps.now_iso()))
+
+    def _roundtrip(self, content: str) -> "ps.Plan":
+        p = self.tmp / "rt_outline.md"
+        p.write_text(content)
+        plan = ps.parse(p)
+        serialized = ps.serialize(plan)
+        p2 = self.tmp / "rt_outline2.md"
+        p2.write_text(serialized)
+        return ps.parse(p2)
+
+    def test_state_a_all_none(self):
+        """BC-3b state (a): layer_a/b/c all None — section omitted."""
+        plan = self._roundtrip(self._fill())
+        self.assertIsNone(plan.layer_a)
+        self.assertIsNone(plan.layer_b)
+        self.assertIsNone(plan.layer_c)
+
+    def test_state_b_partial_fill(self):
+        """BC-3b state (b): only layer_a filled."""
+        partial = """\
+# Design Dimensions
+
+```yaml
+visual_lock:
+  hair: {value: black, scope: locked}
+  outfit: {value: red, scope: per_group}
+```
+"""
+        plan = self._roundtrip(_outline_with_dd(self._fill(), partial))
+        self.assertIsNone(plan.layer_b)
+        self.assertIsNone(plan.layer_c)
+        self.assertIsNotNone(plan.layer_a)
+        self.assertEqual(plan.layer_a.hair.value, "black")
+        self.assertEqual(plan.layer_a.outfit.scope, "per_group")
+
+    def test_state_c_all_filled(self):
+        """BC-3b state (c): all 3 layers filled (uses _DD_SECTION_FULL)."""
+        plan = self._roundtrip(_outline_with_dd(self._fill()))
+        self.assertIsNotNone(plan.layer_b)
+        self.assertIsNotNone(plan.layer_c)
+        self.assertIsNotNone(plan.layer_a)
+        self.assertEqual(plan.layer_b.theme, "奇幻冒險")
+        self.assertEqual(
+            plan.layer_b.cross_group_progression["composition"]["ch1"],
+            "half_body",
+        )
+        self.assertEqual(plan.layer_c.group_arc["ch1"], "離家啟程")
+        self.assertEqual(plan.layer_a.hair.value, "棕色辮子")
+
+    def test_state_d_all_unspecified_normalizes_to_none(self):
+        """BC-3b state (d): layer_a all-unspecified + b/c None → serialize omits section."""
+        # Build a plan whose layer_a is "all unspecified" (no explicit dims set).
+        all_unspec = """\
+# Design Dimensions
+
+```yaml
+visual_lock: {}
+```
+"""
+        plan = self._roundtrip(_outline_with_dd(self._fill(), all_unspec))
+        # Normalize: after round-trip layer_a should be None (no section emitted)
+        self.assertIsNone(plan.layer_a)
+
+    def test_bc3a_behavior_none_vs_all_unspecified(self):
+        """BC-3a: layer_a=None vs LayerA(all unspecified) behave equivalently.
+
+        Both should be 'empty layer A' — serialized output omits the section
+        either way. (derive_prompt EH-4 behavior tested in test_derive.py.)
+        """
+        # Build directly via dataclass.
+        empty_a = ps.LayerA(
+            **{n: ps.Dimension(None, "unspecified")
+               for n in ps._LAYER_A_DIMENSION_NAMES}
+        )
+        plan_none = ps.Plan(
+            id="t", title="t", version=1,
+            created=ps.now_iso(), updated=ps.now_iso(),
+            status="ready", workflow="flux_basic",
+            size=[512, 512], steps=20, batch_per_item=1,
+            seed_strategy={"type": "fixed", "base": 0, "step": 0},
+            items=[ps.Item("a", "p")],
+            layer_a=None,
+        )
+        plan_unspec = ps.Plan(
+            id="t", title="t", version=1,
+            created=ps.now_iso(), updated=ps.now_iso(),
+            status="ready", workflow="flux_basic",
+            size=[512, 512], steps=20, batch_per_item=1,
+            seed_strategy={"type": "fixed", "base": 0, "step": 0},
+            items=[ps.Item("a", "p")],
+            layer_a=empty_a,
+        )
+        s_none = ps.serialize(plan_none)
+        s_unspec = ps.serialize(plan_unspec)
+        # Both omit Design Dimensions section.
+        self.assertNotIn("# Design Dimensions", s_none)
+        self.assertNotIn("# Design Dimensions", s_unspec)
+
+
+class TestBackwardCompat(unittest.TestCase):
+    """BC-14: old outline (no Design Dimensions, manual prompts) unchanged."""
+
+    def test_cards_a11c_outline_still_parses(self):
+        """Existing cards_a11c outline (60 items, no DD section) parses unchanged."""
+        existing = Path(
+            "/Users/gatewenlee/Code/ai_cards/plans/cards_a11c_outline.md"
+        )
+        if not existing.exists():
+            self.skipTest("cards_a11c_outline.md not present")
+        plan = ps.parse(existing)
+        self.assertIsNone(plan.layer_a)
+        self.assertIsNone(plan.layer_b)
+        self.assertIsNone(plan.layer_c)
+        # 5 chapters × 12 items = 60
+        self.assertEqual(len(plan.items), 60)
+        self.assertTrue(plan.items[0].prompt)  # non-empty manual prompt
+
+    def test_template_default_no_dd_section(self):
+        """Default template (no DD) still parses & round-trips."""
+        tpl = (ROOT / "templates" / "default_outline.md").read_text()
+        filled = (tpl
+                  .replace("PLACEHOLDER_ID", "bc_test")
+                  .replace("PLACEHOLDER_TITLE", "x")
+                  .replace("PLACEHOLDER_CREATED", ps.now_iso())
+                  .replace("PLACEHOLDER_UPDATED", ps.now_iso()))
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            p = tmp / "bc.md"
+            p.write_text(filled)
+            plan = ps.parse(p)
+            s = ps.serialize(plan)
+            self.assertNotIn("# Design Dimensions", s)
+        finally:
+            shutil.rmtree(tmp)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
