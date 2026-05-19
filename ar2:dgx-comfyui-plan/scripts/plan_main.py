@@ -1,7 +1,6 @@
 """CLI entry: ar2:dgx-comfyui-plan.
 
 Subcommands:
-  (no args)                              → interactive create
   --from-preset {preset_id}              → fork preset → new working plan
   --list                                 → list working plans
   --show                                 → list presets
@@ -9,16 +8,22 @@ Subcommands:
   --promote {working_id} [--tags x,y] [--desc "..."] [--overwrite]
                                          → working → preset
 
-Implements BC-1 / BC-4 / BC-6 / BC-7 / BC-8 / BC-9 dispatch.
-EH-9: SIGINT in any interactive prompt → exit 130 (handled in plan_create).
+Implements BC-4 / BC-6 / BC-7 / BC-8 / BC-9 dispatch.
+
+NOTE: The (no args) interactive 4-round-input() create flow has been
+deprecated (issue #2): 0% real-world exercise — chat-driven sessions
+always simulate via AskUserQuestion. Users wanting a new plan should
+either --from-preset PRESET_ID (terminal stdin or chat simulate) or
+ask Claude to author the outline.md directly from chat. plan_create
+itself remains, used by plan_from_preset.
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
-import plan_create
 import plan_from_preset
 import plan_promote
 import plan_show
@@ -90,9 +95,16 @@ def main() -> int:
             overwrite=args.overwrite,
         )
 
-    # default: interactive create
-    plan_create.create_plan(_plans_dir())
-    return 0
+    # No-args interactive create is deprecated (issue #2): use --from-preset
+    # for terminal-driven workflows, or have Claude simulate via chat.
+    sys.stderr.write(
+        "⚠️  Interactive create is deprecated.\n"
+        "    Options:\n"
+        "      --from-preset PRESET_ID   fork an existing preset\n"
+        "      --show                    browse available presets\n"
+        "    Or ask Claude to author plans/{id}_outline.md from chat.\n"
+    )
+    return 2
 
 
 if __name__ == "__main__":
