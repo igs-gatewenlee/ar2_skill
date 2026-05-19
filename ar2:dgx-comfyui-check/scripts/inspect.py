@@ -1,7 +1,8 @@
 """Main entry: SSH + health + inventory + compare + report + cache.
 
 Usage:
-    python3 inspect.py
+    python3 inspect.py                      # full inventory (default)
+    python3 inspect.py --apply-pulid-patch  # apply PuLID dtype patch only
 
 Output format spec: see plan v1 Section 4.1.
 Cache spec:        see plan v1 Section 4.2.
@@ -9,6 +10,7 @@ Cache spec:        see plan v1 Section 4.2.
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import time
@@ -28,6 +30,7 @@ from config import (  # noqa: E402
     LAST_INVENTORY_FILE,
 )
 from ssh_client import ssh_exec, ping_host  # noqa: E402
+import pulid_patch  # noqa: E402
 from health import run_all as run_health  # noqa: E402
 
 
@@ -263,6 +266,7 @@ def format_report(
         f"{humanize_bytes(storage['training_bytes'])} · "
         f"free {storage['free']}"
     )
+    out.append(f"  {pulid_patch.status_summary_line()}")
     out.append("==")
 
     return "\n".join(out)
@@ -299,7 +303,36 @@ def write_cache(
 
 # --- Entry ---
 
-def main() -> int:
+def _apply_pulid_patch_flow() -> int:
+    """Standalone flow for --apply-pulid-patch (no inventory).
+
+    No ping_host() preflight here (R-2 fix): apply_patch() already does its
+    own SSH probe via check_patch_status(), so an ICMP-only preflight would
+    just produce a misleading 'cannot reach' message when ICMP is blocked
+    but SSH works.
+    """
+    print("Applying PuLID dtype-cast patch...", flush=True)
+    ok, msg = pulid_patch.apply_patch()
+    print(("✅ " if ok else "❌ ") + msg)
+    return 0 if ok else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="ar2:dgx-comfyui-check",
+        description="DGX ComfyUI health + inventory; PuLID patch deploy.",
+    )
+    parser.add_argument(
+        "--apply-pulid-patch",
+        action="store_true",
+        help="Apply the PuLID dtype-cast patch to encoders_flux.py "
+        "(idempotent; creates a dated backup of pre-patch content).",
+    )
+    args = parser.parse_args(argv)
+
+    if args.apply_pulid_patch:
+        return _apply_pulid_patch_flow()
+
     # Preflight: can we reach DGX at all?
     if not ping_host():
         print(
