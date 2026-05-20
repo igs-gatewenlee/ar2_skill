@@ -46,6 +46,7 @@ class LoadedPlan:
 
 
 _PLAN_SCHEMA_MODULE_NAME = "ar2_plan_schema"
+_PROMPT_DERIVE_MODULE_NAME = "ar2_prompt_derive"
 
 
 def _import_plan_schema():
@@ -53,33 +54,58 @@ def _import_plan_schema():
 
     Returns the loaded module. Raises RuntimeError if not found.
     """
-    if _PLAN_SCHEMA_MODULE_NAME in sys.modules:
-        return sys.modules[_PLAN_SCHEMA_MODULE_NAME]
+    return _import_sibling_module(
+        _PLAN_SCHEMA_MODULE_NAME, "plan_schema.py"
+    )
 
-    # Common candidate paths (project-level install via symlink)
-    here = Path(__file__).resolve()
-    # ar2:dgx-comfyui-gen/scripts/ → parent ar2:dgx-comfyui-gen/ → parent .claude/skills/
-    skills_dir = here.parent.parent.parent
+
+def _import_prompt_derive():
+    """Locate prompt_derive.py from sibling ar2:dgx-comfyui-plan skill.
+
+    BC-G1 / BC-G6 (M2-P1 design spec): same sibling-import pattern as
+    _import_plan_schema; called eagerly at _expand_items entry.
+
+    prompt_derive.py uses `from plan_schema import ...` (raw sibling
+    name), so we alias the cached `ar2_plan_schema` module under
+    `plan_schema` in sys.modules to make that import resolve.
+    """
+    plan_schema_mod = _import_plan_schema()
+    sys.modules.setdefault("plan_schema", plan_schema_mod)
+    return _import_sibling_module(
+        _PROMPT_DERIVE_MODULE_NAME, "prompt_derive.py"
+    )
+
+
+def _import_sibling_module(module_name: str, file_name: str):
+    """Locate `file_name` in sibling ar2:dgx-comfyui-plan skill scripts dir.
+
+    Returns the loaded module, caching it in sys.modules under `module_name`.
+    Raises RuntimeError if not found in any candidate path.
+    """
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+
+    # ar2:dgx-comfyui-gen/scripts/ → ar2:dgx-comfyui-gen/ → .claude/skills/
+    skills_dir = Path(__file__).resolve().parent.parent.parent
+    # Deployed skills layout first, source repo fallback for dev mode.
     candidates = [
-        skills_dir / "ar2:dgx-comfyui-plan" / "scripts" / "plan_schema.py",
-        # Also try ~/Code/ar2-skills/ when running from source repo
+        skills_dir / "ar2:dgx-comfyui-plan" / "scripts" / file_name,
         Path.home() / "Code" / "ar2-skills" / "ar2:dgx-comfyui-plan"
-            / "scripts" / "plan_schema.py",
+            / "scripts" / file_name,
     ]
     for cand in candidates:
-        if cand.exists():
-            spec = importlib.util.spec_from_file_location(
-                _PLAN_SCHEMA_MODULE_NAME, cand
-            )
-            if spec is None or spec.loader is None:
-                continue
-            mod = importlib.util.module_from_spec(spec)
-            sys.modules[_PLAN_SCHEMA_MODULE_NAME] = mod
-            spec.loader.exec_module(mod)
-            return mod
+        if not cand.exists():
+            continue
+        spec = importlib.util.spec_from_file_location(module_name, cand)
+        if spec is None or spec.loader is None:
+            continue
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = mod
+        spec.loader.exec_module(mod)
+        return mod
     raise RuntimeError(
-        "plan_schema not found. Install ar2:dgx-comfyui-plan skill first "
-        f"(searched: {[str(c) for c in candidates]})"
+        f"{file_name[:-3]} not found. Install ar2:dgx-comfyui-plan skill "
+        f"first (searched: {[str(c) for c in candidates]})"
     )
 
 
@@ -145,13 +171,28 @@ def _slug_to_filename_prefix(slug: str, global_index: int) -> str:
 
 
 def _expand_items(plan) -> list[ResolvedItem]:
-    """Apply prefix/suffix (or skip if full?), expand seed_strategy."""
+    """Apply prefix/suffix (or skip if full?), expand seed_strategy.
+
+    BC-G2 / BC-G3 (M2-P1 design spec): items whose prompt exactly equals
+    prompt_derive.DERIVED_SENTINEL are resolved via derive_prompt(); the
+    derived string IS the final_prompt — no _join_prompt wrap, no item.full
+    branch — because derive is the single source of truth for derived
+    prompts (avoids letting style_prefix/suffix containing `|` violate
+    M1 IF-1's "no unescaped `|`" post-condition).
+    """
+    prompt_derive = _import_prompt_derive()  # BC-G6: eager
+    sentinel = prompt_derive.DERIVED_SENTINEL
     prefix = _norm_style(plan.style_prefix)
     suffix = _norm_style(plan.style_suffix)
     seed_seq = _build_seed_iter(plan.seed_strategy, len(plan.items))
     resolved: list[ResolvedItem] = []
     for i, item in enumerate(plan.items, start=1):
-        final = item.prompt if item.full else _join_prompt(prefix, item.prompt, suffix)
+        if item.prompt == sentinel:
+            final = _resolve_derived(prompt_derive, plan, item, i)
+        elif item.full:
+            final = item.prompt
+        else:
+            final = _join_prompt(prefix, item.prompt, suffix)
         resolved.append(ResolvedItem(
             index=i,
             slug=item.slug,
@@ -160,6 +201,24 @@ def _expand_items(plan) -> list[ResolvedItem]:
             filename_prefix=_slug_to_filename_prefix(item.slug, i),
         ))
     return resolved
+
+
+def _resolve_derived(prompt_derive, plan, item, index: int) -> str:
+    """EH-G2: wrap derive_prompt ValueError with item context.
+
+    Re-raise (with `from e` chain) so plan_runner sees a user-friendly
+    message that identifies which item triggered the failure and how to
+    recover (fill Design Dimensions, or replace <derived> with a manual
+    prompt string). Fail-fast on first failing item (EH-G3).
+    """
+    try:
+        return prompt_derive.derive_prompt(plan, item)
+    except ValueError as e:
+        raise ValueError(
+            f"item {index} '{item.slug}' uses <derived> sentinel: {e}. "
+            "Fill Design Dimensions via plan skill, or replace <derived> "
+            "with a manual prompt string."
+        ) from e
 
 
 def _join_prompt(prefix: str, prompt: str, suffix: str) -> str:
