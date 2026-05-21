@@ -107,7 +107,11 @@ def wait_for_completion(
                 f"timeout after {timeout:.0f}s waiting for prompt {prompt_id}"
             )
 
-        history = _get_json(f"/history/{prompt_id}")
+        try:
+            history = _get_json(f"/history/{prompt_id}")
+        except (ComfyUIError, OSError):
+            history = {}
+
         if prompt_id in history:
             entry = history[prompt_id]
             outputs = entry.get("outputs", {})
@@ -176,3 +180,5 @@ def clear_queue() -> bool:
         return True
     except ComfyUIError:
         return False
+    except json.JSONDecodeError:
+        return True
