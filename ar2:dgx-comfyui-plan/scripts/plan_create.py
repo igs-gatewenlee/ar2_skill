@@ -13,7 +13,7 @@ Round 4 — review + confirm
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import plan_schema as ps
@@ -62,30 +62,63 @@ def create_plan(plans_dir: Path, *, preload: ps.Plan | None = None) -> str:
         {"from_preset": preload.id, "forked_at": now}
         if preload is not None else None
     )
-    plan = ps.Plan(
-        id=plan_id,
-        title=r1.title,
-        version=1,
-        created=now,
-        updated=now,
-        status="ready",
-        workflow=workflow,
-        size=size,
-        steps=steps,
-        batch_per_item=batch,
-        seed_strategy=seed_strategy,
-        lora=lora,
-        face_ref=None,
-        story_vision=preload.story_vision if preload else "(empty)",
-        style_prefix=style_prefix,
-        style_suffix=style_suffix,
-        style_negative=style_negative,
-        output_dir=f"outputs/ar2-dgx-comfyui-gen/{plan_id}/",
-        output_naming="{NN}_{slug}_{n}.png",
-        items=items,
-        open_notes=preload.open_notes if preload else "(empty)",
-        provenance=provenance,
-    )
+    output_dir = f"outputs/ar2-dgx-comfyui-gen/{plan_id}/"
+    output_naming = "{NN}_{slug}_{n}.png"
+    if preload is not None:
+        # R-1 fix: dataclasses.replace propagates ALL fields (mode / size_aspect
+        # / character_consistency / layer_a/b/c / style_*_zh / future fields)
+        # automatically — 防 #009 shared-schema blind-assign 第 6 次踩.
+        plan = replace(
+            preload,
+            id=plan_id,
+            title=r1.title,
+            version=1,
+            created=now,
+            updated=now,
+            status="ready",
+            workflow=workflow,
+            size=size,
+            steps=steps,
+            batch_per_item=batch,
+            seed_strategy=seed_strategy,
+            lora=lora,
+            face_ref=None,
+            style_prefix=style_prefix,
+            style_suffix=style_suffix,
+            style_negative=style_negative,
+            output_dir=output_dir,
+            output_naming=output_naming,
+            items=items,
+            provenance=provenance,
+            # Implicitly inherited from preload: story_vision, open_notes,
+            # layer_a, layer_b, layer_c, mode, size_aspect, character_consistency,
+            # style_prefix_zh, style_suffix_zh, style_negative_zh
+        )
+    else:
+        plan = ps.Plan(
+            id=plan_id,
+            title=r1.title,
+            version=1,
+            created=now,
+            updated=now,
+            status="ready",
+            workflow=workflow,
+            size=size,
+            steps=steps,
+            batch_per_item=batch,
+            seed_strategy=seed_strategy,
+            lora=lora,
+            face_ref=None,
+            story_vision="(empty)",
+            style_prefix=style_prefix,
+            style_suffix=style_suffix,
+            style_negative=style_negative,
+            output_dir=output_dir,
+            output_naming=output_naming,
+            items=items,
+            open_notes="(empty)",
+            provenance=provenance,
+        )
 
     # Round 4 — review + confirm
     if not _round4_review(plan):
@@ -146,8 +179,12 @@ def _round2_items(r1: Round1Result, preload: ps.Plan | None) -> list[ps.Item]:
 
 
 def _clone_item(it: ps.Item) -> ps.Item:
-    """Shallow copy so caller can mutate without affecting preload."""
-    return ps.Item(slug=it.slug, prompt=it.prompt, full=it.full)
+    """Shallow copy so caller can mutate without affecting preload.
+
+    Uses dataclasses.replace to inherit ALL fields automatically (R-2 fix:
+    防 #009 — 未來再加 Item 欄位永遠不會漏 propagation).
+    """
+    return replace(it)
 
 
 def _round2_collect_fresh(r1: Round1Result) -> list[ps.Item]:

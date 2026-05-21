@@ -72,13 +72,29 @@ _GROUPING_AXIS_VALUES = {"rarity", "chapter", "custom"}
 _DD_KEY_LAYER_B = "season_structure"
 _DD_KEY_LAYER_C = "narrative_direction"
 _DD_KEY_LAYER_A = "visual_lock"
+# Plan Y v1.2 — per_item beat (Layer D) YAML key inside Design Dimensions.
+_DD_KEY_PER_ITEM_BEATS = "per_item_beats"
+
+# BC-S0 (Plan Y v1.2): Module-level enum SSoT — all literal usages MUST
+# reference these (#009 prevention落地).
+MODE_ENUM = ("album", "storyboard")
+SIZE_ASPECT_ENUM = (
+    "square", "landscape_16_9", "portrait_9_16", "classic_4_3", "portrait_2_3",
+)
+CHARACTER_CONSISTENCY_ENUM = ("prompt_only", "pulid_face_ref", "both")
+SIZE_ASPECT_TO_SIZE: dict[str, tuple[int, int]] = {
+    "square": (1024, 1024), "landscape_16_9": (1280, 720),
+    "portrait_9_16": (720, 1280), "classic_4_3": (1024, 768),
+    "portrait_2_3": (768, 1152),
+}
 
 
 @dataclass
 class Dimension:
-    """Layer A 維度的單一欄位 (value + scope)."""
+    """Layer A 維度的單一欄位 (value + scope + optional zh)."""
     value: str | None
     scope: str  # locked | per_group | unspecified
+    value_zh: str | None = None  # BC-B1 (Plan Y v1.2): Chinese companion for chat UI
 
 
 @dataclass
@@ -116,10 +132,14 @@ class LayerC:
 
 @dataclass
 class Item:
-    """One row of the items table."""
+    """One row of the items table (+ optional Layer D per-item beat)."""
     slug: str
     prompt: str
     full: bool = False  # ✓ → self-contained, no auto inject
+    # BC-D1 (Plan Y v1.2): Layer D per-item beat (storyboard mode); stored in
+    # Design Dimensions per_item_beats block, not in Items table.
+    beat_description: str | None = None
+    beat_description_zh: str | None = None
 
 
 @dataclass
@@ -150,6 +170,10 @@ class Plan:
     style_prefix: str = "(none)"
     style_suffix: str = "(none)"
     style_negative: str = "(none)"
+    # BC-B4 (Plan Y v1.2): bilingual companions for style anchors.
+    style_prefix_zh: str | None = None
+    style_suffix_zh: str | None = None
+    style_negative_zh: str | None = None
     output_dir: str = ""
     output_naming: str = ""
     items: list[Item] = field(default_factory=list)
@@ -158,6 +182,10 @@ class Plan:
     layer_b: LayerB | None = None
     layer_c: LayerC | None = None
     layer_a: LayerA | None = None
+    # BC-S0/S1/S2/S3 (Plan Y v1.2): defaults are ENUM[0]; size_aspect=None for legacy.
+    mode: str = "album"  # MODE_ENUM
+    size_aspect: str | None = None  # SIZE_ASPECT_ENUM
+    character_consistency: str = "prompt_only"  # CHARACTER_CONSISTENCY_ENUM
 
 
 _ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
@@ -340,12 +368,40 @@ def _parse_pulid_weight(value) -> float | None:
 def _build_plan(fm: dict, sections: dict[str, str], path: Path) -> Plan:
     style = sections["# Style anchor"]
     out_block = sections["# Output"]
+    items = _parse_items_table(sections["# Items"], path)
     # Design Dimensions section is optional (BC-1).
     dimensions_text = sections.get(_DESIGN_DIMENSIONS_HEADER)
     if dimensions_text and dimensions_text.strip():
-        layer_b, layer_c, layer_a = _parse_design_dimensions(dimensions_text, path)
+        layer_b, layer_c, layer_a = _parse_design_dimensions(
+            dimensions_text, items, path
+        )
     else:
         layer_b, layer_c, layer_a = (None, None, None)
+    # BC-S1/S2/S3 (Plan Y v1.2): parse mode + size_aspect + character_consistency.
+    mode = _parse_enum(fm.get("mode"), MODE_ENUM, "mode", path)
+    size_aspect = _parse_enum(
+        fm.get("size_aspect"), SIZE_ASPECT_ENUM, "size_aspect", path,
+        none_passthrough=True,
+    )
+    character_consistency = _parse_enum(
+        fm.get("character_consistency"), CHARACTER_CONSISTENCY_ENUM,
+        "character_consistency", path,
+    )
+    # BC-S5 (Plan Y v1.2): size_aspect is SSoT; warn + override on size mismatch.
+    declared_size = list(fm["size"])
+    if size_aspect is not None:
+        expected = list(SIZE_ASPECT_TO_SIZE[size_aspect])
+        if declared_size != expected:
+            sys.stdout.write(
+                f"WARN: {path}: size_aspect={size_aspect!r} implies size={expected}, "
+                f"got size={declared_size}; using size_aspect-derived size\n"
+            )
+            declared_size = expected
+    # BC-B4 (Plan Y v1.2): style anchor _zh extraction (None when absent).
+    style_zh = {
+        k: _extract_style_field(style, f"{k.capitalize()}_zh", None)
+        for k in ("prefix", "suffix", "negative")
+    }
     return Plan(
         id=fm["id"],
         title=fm["title"],
@@ -354,7 +410,7 @@ def _build_plan(fm: dict, sections: dict[str, str], path: Path) -> Plan:
         updated=str(fm["updated"]),
         status=fm["status"],
         workflow=fm["workflow"],
-        size=list(fm["size"]),
+        size=declared_size,
         steps=int(fm["steps"]),
         batch_per_item=int(fm["batch_per_item"]),
         seed_strategy=dict(fm["seed_strategy"]),
@@ -369,23 +425,49 @@ def _build_plan(fm: dict, sections: dict[str, str], path: Path) -> Plan:
         style_prefix=_extract_style(style, "Prefix"),
         style_suffix=_extract_style(style, "Suffix"),
         style_negative=_extract_style(style, "Negative"),
+        style_prefix_zh=style_zh["prefix"],
+        style_suffix_zh=style_zh["suffix"],
+        style_negative_zh=style_zh["negative"],
         output_dir=_extract_output(out_block, "dir") or "",
         output_naming=_extract_output(out_block, "naming") or "",
-        items=_parse_items_table(sections["# Items"], path),
+        items=items,
         open_notes=sections["# Open notes"],
         layer_b=layer_b,
         layer_c=layer_c,
         layer_a=layer_a,
+        mode=mode,
+        size_aspect=size_aspect,
+        character_consistency=character_consistency,
     )
 
 
-def _extract_style(text: str, key: str) -> str:
-    m = re.search(rf"\*\*{key}\*\*\s*[:：]\s*(.*?)(?=\n\*\*|\Z)",
-                  text, re.DOTALL)
+def _parse_enum(
+    value: Any, enum: tuple[str, ...], field_name: str, path: Path,
+    *, none_passthrough: bool = False,
+) -> str | None:
+    """BC-S1/S2/S3 (Plan Y v1.2): validate enum value.
+
+    None → enum[0] default; none_passthrough=True → None (BC-S2/C2.5 legacy).
+    """
+    if value is None:
+        return None if none_passthrough else enum[0]
+    if value not in enum:
+        raise ValueError(
+            f"EH-S: {path}: plan.{field_name} must be one of {enum}; got {value!r}"
+        )
+    return value
+
+
+def _extract_style_field(text: str, key: str, default: str | None) -> str | None:
+    """Shared **Key**: value extractor. BC-B4: pass default=None for _zh fields."""
+    m = re.search(rf"\*\*{key}\*\*\s*[:：]\s*(.*?)(?=\n\*\*|\Z)", text, re.DOTALL)
     if not m:
-        return "(none)"
-    val = m.group(1).strip()
-    return val or "(none)"
+        return default
+    return m.group(1).strip() or default
+
+
+def _extract_style(text: str, key: str) -> str:
+    return _extract_style_field(text, key, "(none)")  # type: ignore[return-value]
 
 
 def _extract_output(text: str, key: str) -> str | None:
@@ -495,6 +577,12 @@ def _plan_to_frontmatter(plan: Plan) -> dict[str, Any]:
     for key, value in optional.items():
         if value is not None:
             d[key] = value
+    # Plan Y v1.2 (BC-S1/S2/S3): mode + character_consistency always emitted
+    # for round-trip; size_aspect only when non-None (BC-C2.5 legacy preset).
+    d["mode"] = plan.mode
+    if plan.size_aspect is not None:
+        d["size_aspect"] = plan.size_aspect
+    d["character_consistency"] = plan.character_consistency
     return d
 
 
@@ -509,11 +597,17 @@ def _plan_to_body(plan: Plan) -> str:
     ]
     if dimensions_section:
         lines.extend([dimensions_section, ""])
+    # BC-B4 (Plan Y v1.2): style anchor with optional _zh companions.
+    lines.append("# Style anchor")
+    for label, val, val_zh in (
+        ("Prefix", plan.style_prefix, plan.style_prefix_zh),
+        ("Suffix", plan.style_suffix, plan.style_suffix_zh),
+        ("Negative", plan.style_negative, plan.style_negative_zh),
+    ):
+        lines.append(f"**{label}**: {val}")
+        if val_zh is not None:
+            lines.append(f"**{label}_zh**: {val_zh}")
     lines.extend([
-        "# Style anchor",
-        f"**Prefix**: {plan.style_prefix}",
-        f"**Suffix**: {plan.style_suffix}",
-        f"**Negative**: {plan.style_negative}",
         "",
         "# Output",
         f"- dir: {plan.output_dir}",
@@ -539,12 +633,12 @@ def _plan_to_body(plan: Plan) -> str:
 
 
 def _parse_design_dimensions(
-    text: str, path: Path
+    text: str, items: list[Item], path: Path
 ) -> tuple[LayerB | None, LayerC | None, LayerA | None]:
-    """Parse `# Design Dimensions` section text → (LayerB, LayerC, LayerA).
+    """Parse `# Design Dimensions` section → (LayerB, LayerC, LayerA).
 
-    Accepts bare YAML or YAML wrapped in a ```yaml ... ``` fence.
-    Missing top-level layer key → that layer is None.
+    Also applies per_item_beats (Plan Y v1.2 Layer D, BC-D2/D5) to `items`
+    in place. Accepts bare YAML or ```yaml fence. Missing layer key → None.
     Missing Layer A dim → default Dimension(None, "unspecified") (BC-4).
     """
     yaml_text = _strip_yaml_fence(text)
@@ -562,7 +656,59 @@ def _parse_design_dimensions(
     layer_b = _layer_b_from_dict(data.get(_DD_KEY_LAYER_B), path)
     layer_c = _layer_c_from_dict(data.get(_DD_KEY_LAYER_C), path)
     layer_a = _layer_a_from_dict(data.get(_DD_KEY_LAYER_A), path)
+    # BC-D2 (Plan Y v1.2): apply per_item_beats to items.
+    _apply_per_item_beats(data.get(_DD_KEY_PER_ITEM_BEATS), items, path)
     return layer_b, layer_c, layer_a
+
+
+def _apply_per_item_beats(data: Any, items: list[Item], path: Path) -> None:
+    """BC-D2/D5 + EH-D1/D2 (Plan Y v1.2): Apply per_item_beats to items in place.
+
+    None → no-op (BC-D4 legacy compat). Unknown slug → EH-D1. Non-mapping
+    entry → EH-D2. Item without entry → beat_description stays None (BC-D5).
+    """
+    if data is None:
+        return
+    data = _require_mapping(data, _DD_KEY_PER_ITEM_BEATS, path)
+    items_by_slug = {item.slug: item for item in items}
+    for slug, entry in data.items():
+        if slug not in items_by_slug:
+            raise ValueError(
+                f"EH-D1: {path}: per_item_beats has unknown slug: {slug!r}; "
+                f"valid slugs: {sorted(items_by_slug.keys())}"
+            )
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"EH-D2: {path}: per_item_beats[{slug!r}] must be a mapping, "
+                f"got {type(entry).__name__}"
+            )
+        item = items_by_slug[slug]
+        desc = entry.get("description")
+        if desc is not None:
+            item.beat_description = str(desc)
+        desc_zh = entry.get("description_zh")
+        if desc_zh is not None:
+            if not isinstance(desc_zh, str):
+                raise ValueError(
+                    f"EH-D2: {path}: per_item_beats[{slug!r}].description_zh "
+                    f"must be string, got {type(desc_zh).__name__}"
+                )
+            item.beat_description_zh = desc_zh
+
+
+def _per_item_beats_to_dict(items: list[Item]) -> dict[str, dict[str, str]] | None:
+    """BC-D3 (Plan Y v1.2): Build per_item_beats YAML block; None if all empty."""
+    out: dict[str, dict[str, str]] = {}
+    for item in items:
+        entry = {
+            k: v for k, v in (
+                ("description", item.beat_description),
+                ("description_zh", item.beat_description_zh),
+            ) if v is not None
+        }
+        if entry:
+            out[item.slug] = entry
+    return out or None
 
 
 def _strip_yaml_fence(text: str) -> str:
@@ -665,9 +811,16 @@ def _dimension_from_dict(name: str, data: Any, path: Path) -> Dimension:
     # R-4 fix: normalize — scope=unspecified can never carry a meaningful value.
     if scope == "unspecified":
         value = None
+    # BC-B1 + EH-B1 (Plan Y v1.2): optional value_zh with type check.
+    value_zh = data.get("value_zh")
+    if value_zh is not None and not isinstance(value_zh, str):
+        raise ValueError(
+            f"EH-B1: {path}: Dimension.{name}.value_zh must be string, "
+            f"got {type(value_zh).__name__}"
+        )
     return Dimension(
         value=str(value) if value is not None else None,
-        scope=scope,
+        scope=scope, value_zh=value_zh,
     )
 
 
@@ -677,7 +830,8 @@ def _design_dimensions_to_body(plan: Plan) -> str:
     Returns "" when all three layers are effectively empty (BC-3b normalize):
     layer_b/c are None and layer_a is None or all dimensions unspecified.
     """
-    if _all_layers_empty(plan):
+    per_item_beats = _per_item_beats_to_dict(plan.items)
+    if _all_layers_empty(plan) and per_item_beats is None:
         return ""
     body: dict[str, Any] = {}
     if plan.layer_b is not None:
@@ -686,6 +840,9 @@ def _design_dimensions_to_body(plan: Plan) -> str:
         body[_DD_KEY_LAYER_C] = _layer_c_to_dict(plan.layer_c)
     if plan.layer_a is not None and not layer_a_is_empty(plan.layer_a):
         body[_DD_KEY_LAYER_A] = _layer_a_to_dict(plan.layer_a)
+    # BC-D3 (Plan Y v1.2): emit per_item_beats block if any item has beat.
+    if per_item_beats is not None:
+        body[_DD_KEY_PER_ITEM_BEATS] = per_item_beats
     yaml_text = yaml.safe_dump(body, allow_unicode=True, sort_keys=False)
     return f"{_DESIGN_DIMENSIONS_HEADER}\n\n```yaml\n{yaml_text}```"
 
@@ -711,28 +868,23 @@ def _layer_b_to_dict(lb: LayerB) -> dict[str, Any]:
         "grouping_axis": lb.grouping_axis,
         "groups": lb.groups,
     }
-    if lb.cross_group_progression is not None:
-        d["cross_group_progression"] = lb.cross_group_progression
-    if lb.character_continuity is not None:
-        d["character_continuity"] = lb.character_continuity
-    if lb.acceptance is not None:
-        d["acceptance"] = lb.acceptance
+    for k in ("cross_group_progression", "character_continuity", "acceptance"):
+        v = getattr(lb, k)
+        if v is not None:
+            d[k] = v
     return d
 
 
 def _layer_c_to_dict(lc: LayerC) -> dict[str, Any]:
-    d: dict[str, Any] = {
-        "character_seed": lc.character_seed,
-        "group_arc": lc.group_arc,
-    }
+    d: dict[str, Any] = {"character_seed": lc.character_seed, "group_arc": lc.group_arc}
     if lc.emotion_palette is not None:
         d["emotion_palette"] = lc.emotion_palette
     return d
 
 
 def _layer_a_to_dict(la: LayerA) -> dict[str, Any]:
-    """Serialize Layer A. R-4 fix: skip all dims with scope=unspecified
-    (whether or not value is set — unspecified can never carry value)."""
+    """Serialize Layer A. R-4: skip dims with scope=unspecified.
+    BC-B2 (Plan Y v1.2): emit value / value_zh only when non-None."""
     out: dict[str, Any] = {}
     for name in _LAYER_A_DIMENSION_NAMES:
         dim: Dimension = getattr(la, name)
@@ -741,5 +893,7 @@ def _layer_a_to_dict(la: LayerA) -> dict[str, Any]:
         entry: dict[str, Any] = {"scope": dim.scope}
         if dim.value is not None:
             entry["value"] = dim.value
+        if dim.value_zh is not None:
+            entry["value_zh"] = dim.value_zh
         out[name] = entry
     return out
