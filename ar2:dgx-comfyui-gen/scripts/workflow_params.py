@@ -89,6 +89,7 @@ def inject(
     height: int | None = None,
     face_ref_filename: str | None = None,
     pulid_weight: float | None = None,
+    bg_remove_strength: float | None = None,
     output_subdir: str | None = None,
     filename_prefix_override: str | None = None,
     deep_copy: bool = True,
@@ -172,6 +173,16 @@ def inject(
             )
         for _nid, node in pulid_nodes:
             node["inputs"]["weight"] = float(pulid_weight)
+
+    # --- bg_remove_strength / InspyrenetRembgAdvanced.threshold（透明 Route A）---
+    if bg_remove_strength is not None:
+        rembg_nodes = _find_nodes_by_class(wf, "InspyrenetRembgAdvanced")
+        if not rembg_nodes:
+            raise WorkflowParamError(
+                "bg_remove_strength given but no InspyrenetRembgAdvanced node in workflow"
+            )
+        for _nid, node in rembg_nodes:
+            node["inputs"]["threshold"] = float(bg_remove_strength)
 
     # --- face_ref / LoadImage ---
     if face_ref_filename is not None:

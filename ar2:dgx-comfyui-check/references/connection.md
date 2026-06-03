@@ -126,3 +126,19 @@ sshpass -p 'root' ssh -fN \
 | 輸入（face refs 等） | `/root/ComfyUI/input/` |
 | 自訂 nodes | `/root/ComfyUI/custom_nodes/` |
 | LoRA 訓練工作區 | `/root/lora_training/` |
+
+## ⛔ 啟動 ComfyUI（重啟後必讀）
+
+DGX 重啟後須用 **`/root/start_comfyui.sh`** 啟動 ComfyUI（源碼：`scripts/start_comfyui_dgx.sh`），**不可裸跑 `python3 main.py`**。
+
+原因：本機 GPU driver 為 **450.216.04（CUDA 11.0）**。ComfyUI 預設啟用 cuda-malloc（`cudaMallocAsync`，需 driver ≥ CUDA 11.2），此舊 driver 不支援 → **所有 GPU 模型推論**（Flux 產圖 / 去背 / CLIPTextEncode）撞：
+
+```
+RuntimeError: CUDA error: API call is not supported in the installed CUDA driver
+```
+
+啟動腳本已帶 **`--disable-cuda-malloc`**（改 native 分配器）解決。
+
+> ⚠️ 診斷陷阱：standalone torch op（matmul/conv/fp8）用 native 分配器，故單測「GPU 正常」會誤導——真因是 ComfyUI 進程的預設 allocator。`nvidia-smi`/SSH 正常 ≠ GPU 推論正常。
+>
+> 自動開機啟動（可選）：可加 systemd unit 或 `@reboot` cron 跑此腳本，免重啟後手動啟動。

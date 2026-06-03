@@ -34,7 +34,7 @@ import pulid_patch  # noqa: E402
 from health import run_all as run_health  # noqa: E402
 
 
-# 13 categories + minimum expected files.
+# Model categories + minimum expected files (count = len(EXPECTED)).
 # Keep this in sync with references/models.md "核心必備模型".
 EXPECTED: dict[str, list[str]] = {
     "checkpoints": [],
@@ -53,6 +53,9 @@ EXPECTED: dict[str, list[str]] = {
     "style_models": ["flux1-redux-dev.safetensors"],
     "insightface": [],
     "facerestore_models": [],
+    # 透明素材 Route B（LayerDiffuse）透明 VAE / attn 權重。空 expected（v1 選用，
+    # 非核心）；盤點到此類即餵 Route B PoC gate（缺 → Route B pending）。
+    "layer_model": [],
 }
 
 
@@ -217,7 +220,7 @@ def format_report(
     total_size = sum(item["size"] for items in inventory.values() for item in items)
     out.append("")
     out.append(
-        f"📦 Models (13 cats / {total_files} files / {humanize_bytes(total_size)})"
+        f"📦 Models ({len(EXPECTED)} cats / {total_files} files / {humanize_bytes(total_size)})"
     )
 
     green_cats: list[tuple[str, int, int]] = []

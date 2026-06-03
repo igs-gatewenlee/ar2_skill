@@ -23,6 +23,7 @@
 | `style_models` | `/root/ComfyUI/models/style_models/` | Flux Redux 等風格模型 |
 | `insightface` | `/root/ComfyUI/models/insightface/` | 臉部偵測（antelopev2 / inswapper） |
 | `facerestore_models` | `/root/ComfyUI/models/facerestore_models/` | 臉部修復（CodeFormer / GFPGAN） |
+| `layer_model` | `/root/ComfyUI/models/layer_model/` | 透明素材 Route B（LayerDiffuse）透明 VAE / attn（v1 選用，缺→Route B PoC-pending） |
 
 ---
 

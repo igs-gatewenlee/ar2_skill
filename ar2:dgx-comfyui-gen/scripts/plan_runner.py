@@ -14,6 +14,7 @@ EH-9  Ctrl-C during polling → detach, training continues on DGX.
 
 from __future__ import annotations
 
+import copy
 import datetime
 import json
 import sys
@@ -28,6 +29,76 @@ from ssh_client import ensure_tunnel, ssh_exec, scp_get, scp_put  # noqa: E402
 import comfyui_api as api  # noqa: E402
 from workflow_params import inject, WorkflowParamError  # noqa: E402
 import plan_loader  # noqa: E402
+
+# ── 透明素材（Route A/B）跨 skill 資源定位 + per-route dispatch（T3 / M-1）──
+_TRANSPARENT_SKILL = "ar2:dgx-comfyui-transparent"
+_TRANSPARENT_ROUTE_WF = {
+    "rembg": "route_a_rmbg.json",
+    "layerdiffuse": "route_b_layerdiffuse_sdxl.json",
+    "vfx_additive": "vfx_additive.json",
+}
+# matte 前提：vfx_additive 須在純黑底產圖，dispatch 自動補此 prompt 後綴。
+_VFX_ADDITIVE_PROMPT_SUFFIX = ", on pure solid black background, no other objects"
+_TRANSPARENT_OUTPUT_DIR_NAME = "outputs/ar2-dgx-comfyui-transparent"
+
+
+def _transparent_skill_dir() -> Path | None:
+    """定位 sibling ar2:dgx-comfyui-transparent skill（deployed 或 source repo）。"""
+    skills_dir = Path(__file__).resolve().parent.parent.parent
+    for base in (skills_dir, Path.home() / "Code" / "ar2-skills"):
+        cand = base / _TRANSPARENT_SKILL
+        if cand.exists():
+            return cand
+    return None
+
+
+def _resolve_route_workflow(route: str) -> Path:
+    d = _transparent_skill_dir()
+    if d is None:
+        raise WorkflowParamError(f"route={route} 需 {_TRANSPARENT_SKILL} skill，但找不到")
+    p = d / "workflows" / _TRANSPARENT_ROUTE_WF[route]
+    if not p.exists():
+        raise WorkflowParamError(f"找不到 route workflow：{p}")
+    return p
+
+
+def _load_transparent_modules():
+    """lazy 載入透明 skill 的本地後處理模組（只在處理透明 item 時呼叫）。"""
+    d = _transparent_skill_dir()
+    if d is None:
+        raise WorkflowParamError(f"postprocess 需 {_TRANSPARENT_SKILL} skill，但找不到")
+    scripts_dir = str(d / "scripts")
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    import transparent_postprocess as pp  # noqa
+    import qc as qcmod  # noqa
+    import asset_spec  # noqa
+    return pp, qcmod, asset_spec
+
+
+def _apply_run_subdir(wf: dict, run_dir_name: str) -> None:
+    """把透明 workflow 的 SaveImage filename_prefix 內 {run_subdir} 佔位換成 run_dir_name（M-1）。
+
+    inject 對透明 route 完全不碰 SaveImage（傳雙 None），run subdir 隔離靠此處字串替換。
+    """
+    for node in wf.values():
+        if isinstance(node, dict) and node.get("class_type") == "SaveImage":
+            fp = node.get("inputs", {}).get("filename_prefix", "")
+            if "{run_subdir}" in fp:
+                node["inputs"]["filename_prefix"] = fp.replace("{run_subdir}", run_dir_name)
+
+
+def _build_template_cache(loaded: plan_loader.LoadedPlan) -> dict:
+    """按 plan 出現的 route 預載各自 workflow template（strip metadata 後）。"""
+    cache: dict[str, dict] = {}
+    for route in {getattr(it, "route", "none") for it in loaded.items}:
+        if route == "none":
+            path = _resolve_workflow(loaded.workflow)
+        else:
+            path = _resolve_route_workflow(route)
+        tmpl = plan_loader.strip_workflow_metadata(json.loads(path.read_text()))
+        cache[route] = tmpl
+    return cache
 
 
 def run_plan(plan_id: str, plans_dir: Path, items_spec: str | None = None) -> int:
@@ -63,12 +134,12 @@ def _run(
     plans_dir: Path,
     run_dir_name: str,
 ) -> int:
-    workflow_path = _resolve_workflow(loaded.workflow)
-    workflow_template = json.loads(workflow_path.read_text())
-    workflow_template = plan_loader.strip_workflow_metadata(workflow_template)
+    # per-route template cache（route=none → loaded.workflow；透明 route → bundled）
+    templates = _build_template_cache(loaded)
+    routes = sorted({getattr(it, "route", "none") for it in loaded.items})
 
     print(f"== ar2:dgx-comfyui-gen --{loaded.mode} @ {HOST} ==")
-    print(f"  workflow: {workflow_path.name}")
+    print(f"  workflow: {loaded.workflow}" + (f"  routes: {routes}" if routes != ["none"] else ""))
     print(f"  items: {len(loaded.items)}")
     print(f"  run_dir: {run_dir_name}")
     print()
@@ -87,7 +158,7 @@ def _run(
     started_at = _now_tz()
     started_ts = time.time()
 
-    submissions = _submit_all(workflow_template, loaded, run_dir_name,
+    submissions = _submit_all(templates, loaded, run_dir_name,
                               face_ref_filename)
     succeeded_prompts = [s for s in submissions if s["prompt_id"]]
     print(f"\nSubmitted {len(succeeded_prompts)}/{len(loaded.items)} items.")
@@ -168,31 +239,67 @@ def _upload_face_ref(face_ref_local: str | None, run_dir_name: str) -> str | Non
     return local.name
 
 
+def _inject_transparent(template: dict, item, loaded, run_dir_name: str) -> dict:
+    """透明 route 注入（M-1）：先替換 {run_subdir}，再 inject 傳雙 None 保留寫死前綴。"""
+    wf = copy.deepcopy(template)
+    _apply_run_subdir(wf, run_dir_name)
+    tp = item.transparent or {}
+    tsize = tp.get("size")
+    w = h = int(tsize) if tsize else loaded.size[0]
+    if not tsize:
+        h = loaded.size[1]
+    # vfx_additive 的 luminance-matte 前提：黑底。自動補後綴（作者已寫則不重複）。
+    prompt = item.final_prompt
+    if getattr(item, "route", "none") == "vfx_additive" and "black background" not in prompt.lower():
+        prompt += _VFX_ADDITIVE_PROMPT_SUFFIX
+    # R-1：route_a_rmbg.json 只有 1 個 CLIPTextEncode（Flux guidance-distilled 不吃 CFG
+    # negative）。若傳 plan 的 negative，inject 因「no second CLIPTextEncode」對每個透明
+    # item raise → 全數失敗。v1 Route A 不套用 negative prompt（與 Flux 單 encoder 對齊）。
+    return inject(
+        wf,
+        prompt=prompt,
+        negative_prompt=None,
+        seed=item.seed,
+        steps=loaded.steps,
+        batch_size=1,
+        width=w,
+        height=h,
+        bg_remove_strength=tp.get("bg_remove_strength"),
+        output_subdir=None,            # M-1：兩參數皆 None → inject 跳過 SaveImage 覆寫
+        filename_prefix_override=None,  # M-1：保留 JSON 寫死的 source/mask 子目錄前綴
+        deep_copy=False,                # wf 已 deepcopy
+    )
+
+
 def _submit_all(
-    workflow_template: dict,
+    templates: dict,
     loaded: plan_loader.LoadedPlan,
     run_dir_name: str,
     face_ref_filename: str | None,
 ) -> list[dict]:
-    """Submit each item; tolerate per-item failure (EH-7)."""
+    """Submit each item; tolerate per-item failure (EH-7). Per-route template dispatch（T3）。"""
     submissions: list[dict] = []
     for item in loaded.items:
         tag = f"  [{item.index:02d}] {item.slug}"
+        route = getattr(item, "route", "none")
         try:
-            patched = inject(
-                workflow_template,
-                prompt=item.final_prompt,
-                negative_prompt=(loaded.negative or None),
-                seed=item.seed,
-                steps=loaded.steps,
-                batch_size=1,
-                width=loaded.size[0],
-                height=loaded.size[1],
-                face_ref_filename=face_ref_filename,
-                pulid_weight=loaded.pulid_weight,
-                output_subdir=run_dir_name,
-                filename_prefix_override=item.filename_prefix,
-            )
+            if route == "none":
+                patched = inject(
+                    templates["none"],
+                    prompt=item.final_prompt,
+                    negative_prompt=(loaded.negative or None),
+                    seed=item.seed,
+                    steps=loaded.steps,
+                    batch_size=1,
+                    width=loaded.size[0],
+                    height=loaded.size[1],
+                    face_ref_filename=face_ref_filename,
+                    pulid_weight=loaded.pulid_weight,
+                    output_subdir=run_dir_name,
+                    filename_prefix_override=item.filename_prefix,
+                )
+            else:
+                patched = _inject_transparent(templates[route], item, loaded, run_dir_name)
         except WorkflowParamError as e:
             print(f"{tag}: inject failed: {e}")
             submissions.append(
@@ -237,6 +344,7 @@ def _process_prompt(
         print(f"{tag}: no output files")
         sub["error"] = "no-output"
         return
+    item_files: list[Path] = []  # 本 prompt 下載的本地檔（透明 postprocess hook 用）
     for filename, subfolder in files:
         remote = f"{OUTPUT_DIR}/{subfolder}/{filename}".replace("//", "/")
         # Preserve subdir structure under local_root (e.g. ch1/, ch2/ for
@@ -258,7 +366,69 @@ def _process_prompt(
             sub["error"] = f"scp: {e}"
             return
         downloaded.append(str(local))
+        item_files.append(local)
         print(f"{tag}: {(rel_sub + '/' if rel_sub else '') + filename}")
+
+    # 透明 route：source+mask 同一 prompt 內 → per-prompt postprocess（compose/QC，BC-11）
+    if getattr(item, "route", "none") != "none":
+        _postprocess_transparent(item, item_files, run_dir_name, sub)
+
+
+def _postprocess_transparent(item, item_files, run_dir_name: str, sub: dict) -> None:
+    """本地後處理：source+mask → compose_rgba straight → fix_alpha → trim → final → QC。
+
+    BC-11：source/mask 任一缺漏（鏈中途失敗）→ 標降級不 raise（不中斷整批）。
+    """
+    tag = f"  [{item.index:02d}] {item.slug}"
+    route = getattr(item, "route", "none")
+    # 依子目錄前綴分類；vfx_additive 只有 rgb（alpha 由 luminance 算，無獨立 mask）
+    src = next((p for p in item_files if p.parent.name in ("source", "rgb")), None)
+    msk = next((p for p in item_files if p.parent.name in ("mask", "alpha")), None)
+    need_mask = route != "vfx_additive"
+    if src is None or (need_mask and msk is None):
+        missing = "source/rgb" if src is None else "mask"
+        sub["error"] = f"transparent: 缺 {missing}（BC-11 降級）"
+        print(f"{tag}: ⚠️ 缺 {missing}，跳過 postprocess")
+        return
+    try:
+        pp, qcmod, asset_spec = _load_transparent_modules()
+        from PIL import Image
+        tp = item.transparent or {}
+        category = tp.get("category", "asset")
+        size = tp.get("size", "")
+        asset_type = item.asset_type or ("semi" if route == "vfx_additive" else "opaque")
+        folder = (Path.cwd() / _TRANSPARENT_OUTPUT_DIR_NAME / run_dir_name
+                  / f"{category}_{item.slug}")
+        folder.mkdir(parents=True, exist_ok=True)
+        if route == "vfx_additive":
+            rgba = pp.luminance_matte(Image.open(src))  # 加色特效：alpha=亮度（黑底）
+        else:
+            rgba = pp.compose_rgba(Image.open(src), Image.open(msk))
+            rgba = pp.edge_bleed(rgba)  # §5.2：blur 前填 alpha=0 RGB，避免邊緣黑/白暈
+        shrink = int(tp.get("alpha_shrink", 1)) if asset_type == "opaque" else 0
+        rgba, warns = pp.fix_alpha(rgba, asset_type, shrink=shrink,
+                                   blur=float(tp.get("alpha_blur", 1.0)))
+        rgba = pp.auto_trim(rgba, padding=int(tp.get("padding", 8)))
+        ver = asset_spec.next_version(folder, category, item.slug, size)
+        fn = asset_spec.asset_filename(category, item.slug, size, ver)
+        rgba.save(folder / fn)
+        previews: list[str] = []
+        if asset_type == "semi":  # R-4：semi 必出深淺底預覽
+            dark, light = pp.make_previews(rgba)
+            dark.save(folder / "preview_dark.png")
+            light.save(folder / "preview_light.png")
+            previews = ["preview_dark.png", "preview_light.png"]
+        rep = qcmod.run_qc(folder / fn, asset_type, route=item.route,
+                           previews=previews or None)
+        if warns:
+            rep.setdefault("warnings", []).extend(warns)
+        (folder / "report.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2))
+        sub["transparent_final"] = str(folder / fn)
+        sub["qc_result"] = rep["result"]
+        print(f"{tag}: ✅ transparent QC={rep['result']} → {fn}")
+    except Exception as e:  # postprocess 失敗不中斷整批
+        sub["error"] = f"postprocess: {e}"
+        print(f"{tag}: ⚠️ postprocess 失敗：{e}")
 
 
 def _write_history(

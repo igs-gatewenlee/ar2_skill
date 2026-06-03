@@ -1,0 +1,16 @@
+{
+  "_comment": "vfx_additive: ar2:dgx-comfyui-transparent Route 'vfx_additive'（發光類半透明）。Flux 在純黑底產加色特效 -> 單 SaveImage(rgb)。alpha 由本地 luminance_matte 從亮度算（黑=透明、亮=不透明，保留中介值不二值化），不需 LayerDiffuse。SaveImage filename_prefix 寫死含 {run_subdir} 佔位 + rgb/ 子目錄（M-1）：caller 替換 {run_subdir}, inject 不碰 SaveImage。注入: CLIPTextEncode(3).text / RandomNoise(6).noise_seed / EmptySD3LatentImage(4).width,height / BasicScheduler(8).steps. dispatch 對此 route 自動補 'on pure solid black background' prompt 後綴（matte 前提）。適用發光/能量/火焰/粒子；不適用煙霧/玻璃（走 Route B）。",
+  "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "flux1-dev.safetensors", "weight_dtype": "fp8_e4m3fn"}},
+  "2": {"class_type": "DualCLIPLoader", "inputs": {"clip_name1": "clip_l.safetensors", "clip_name2": "t5xxl_fp8_e4m3fn.safetensors", "type": "flux"}},
+  "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["2", 0]}},
+  "4": {"class_type": "EmptySD3LatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+  "5": {"class_type": "FluxGuidance", "inputs": {"conditioning": ["3", 0], "guidance": 3.5}},
+  "6": {"class_type": "RandomNoise", "inputs": {"noise_seed": 0}},
+  "7": {"class_type": "BasicGuider", "inputs": {"model": ["1", 0], "conditioning": ["5", 0]}},
+  "8": {"class_type": "BasicScheduler", "inputs": {"scheduler": "normal", "steps": 20, "denoise": 1.0, "model": ["1", 0]}},
+  "9": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+  "10": {"class_type": "SamplerCustomAdvanced", "inputs": {"noise": ["6", 0], "guider": ["7", 0], "sampler": ["9", 0], "sigmas": ["8", 0], "latent_image": ["4", 0]}},
+  "11": {"class_type": "VAELoader", "inputs": {"vae_name": "flux_ae.safetensors"}},
+  "12": {"class_type": "VAEDecode", "inputs": {"samples": ["10", 0], "vae": ["11", 0]}},
+  "13": {"class_type": "SaveImage", "inputs": {"filename_prefix": "{run_subdir}/rgb/img", "images": ["12", 0]}}
+}

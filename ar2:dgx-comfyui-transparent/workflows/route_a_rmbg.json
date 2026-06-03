@@ -1,0 +1,19 @@
+{
+  "_comment": "route_a_rmbg: ar2:dgx-comfyui-transparent Route A (去背). Flux 產滿版 RGB -> InspyrenetRembgAdvanced -> source/mask 雙 SaveImage. 兩 SaveImage filename_prefix 寫死含 {run_subdir} 佔位 + source/ mask/ 子目錄段 (M-1): 提交前由 caller 字串替換 {run_subdir}, inject 完全不碰 SaveImage. 注入點: CLIPTextEncode(3).text / RandomNoise(6).noise_seed / EmptySD3LatentImage(4).width,height / BasicScheduler(8).steps / InspyrenetRembgAdvanced(14).threshold. 核心 SaveImage 不寫 alpha (F-11) -> 只落 source(RGB)+mask(灰階), RGBA 本地重組. 去背節點需 CPU patch (driver 450/CUDA11.0 GPU-in-ComfyUI 失敗), 見 scripts/patch_rembg_cpu.sh.",
+  "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "flux1-dev.safetensors", "weight_dtype": "fp8_e4m3fn"}},
+  "2": {"class_type": "DualCLIPLoader", "inputs": {"clip_name1": "clip_l.safetensors", "clip_name2": "t5xxl_fp8_e4m3fn.safetensors", "type": "flux"}},
+  "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["2", 0]}},
+  "4": {"class_type": "EmptySD3LatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+  "5": {"class_type": "FluxGuidance", "inputs": {"conditioning": ["3", 0], "guidance": 3.5}},
+  "6": {"class_type": "RandomNoise", "inputs": {"noise_seed": 0}},
+  "7": {"class_type": "BasicGuider", "inputs": {"model": ["1", 0], "conditioning": ["5", 0]}},
+  "8": {"class_type": "BasicScheduler", "inputs": {"scheduler": "normal", "steps": 20, "denoise": 1.0, "model": ["1", 0]}},
+  "9": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+  "10": {"class_type": "SamplerCustomAdvanced", "inputs": {"noise": ["6", 0], "guider": ["7", 0], "sampler": ["9", 0], "sigmas": ["8", 0], "latent_image": ["4", 0]}},
+  "11": {"class_type": "VAELoader", "inputs": {"vae_name": "flux_ae.safetensors"}},
+  "12": {"class_type": "VAEDecode", "inputs": {"samples": ["10", 0], "vae": ["11", 0]}},
+  "13": {"class_type": "SaveImage", "inputs": {"filename_prefix": "{run_subdir}/source/img", "images": ["12", 0]}},
+  "14": {"class_type": "InspyrenetRembgAdvanced", "inputs": {"image": ["12", 0], "threshold": 0.5, "torchscript_jit": "default"}},
+  "15": {"class_type": "MaskToImage", "inputs": {"mask": ["14", 1]}},
+  "16": {"class_type": "SaveImage", "inputs": {"filename_prefix": "{run_subdir}/mask/img", "images": ["15", 0]}}
+}

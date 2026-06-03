@@ -27,6 +27,10 @@ class ResolvedItem:
     final_prompt: str
     seed: int
     filename_prefix: str  # `{NN}_{slug}` per output naming
+    # 透明素材（Route A/B）。route 預設 "none" → 走原 Flux 管線零行為改變（白名單 dispatch §7.4）。
+    route: str = "none"  # "none" | "rembg" | "layerdiffuse"
+    asset_type: str | None = None  # "opaque" | "semi"（route≠none 時必填，BC-6）
+    transparent: dict | None = None  # 合併 defaults+item params（category/size/bg_remove_strength…）
 
 
 @dataclass
@@ -48,15 +52,35 @@ class LoadedPlan:
 _PLAN_SCHEMA_MODULE_NAME = "ar2_plan_schema"
 _PROMPT_DERIVE_MODULE_NAME = "ar2_prompt_derive"
 
+# gen 需要的 plan_schema 最低契約版本（M-2）。plan_schema 加 transparent_assets = 1.3.0。
+_REQUIRED_SCHEMA_VERSION = "1.3.0"
+
+
+def _version_tuple(v: str) -> tuple[int, ...]:
+    """'1.10.0' → (1,10,0)，數值比較（避免字串 '1.10'<'1.9' 的陷阱）。非數字段視為 0。"""
+    parts = []
+    for seg in str(v).split("."):
+        parts.append(int(seg) if seg.isdigit() else 0)
+    return tuple(parts)
+
 
 def _import_plan_schema():
     """Locate plan_schema.py from sibling ar2:dgx-comfyui-plan skill.
 
     Returns the loaded module. Raises RuntimeError if not found.
+
+    M-2：import 後 assert SCHEMA_VERSION >= REQUIRED，把跨 skill version drift 從
+    silent（setdefault 撿舊版 → 缺欄 AttributeError 在很後面才爆）升為 fail-loud。
+    此處執行即涵蓋 _import_prompt_derive 路徑（它先呼叫本函式）。
     """
-    return _import_sibling_module(
-        _PLAN_SCHEMA_MODULE_NAME, "plan_schema.py"
-    )
+    mod = _import_sibling_module(_PLAN_SCHEMA_MODULE_NAME, "plan_schema.py")
+    have = getattr(mod, "SCHEMA_VERSION", "0.0.0")
+    if _version_tuple(have) < _version_tuple(_REQUIRED_SCHEMA_VERSION):
+        raise RuntimeError(
+            f"plan_schema 版本過舊：SCHEMA_VERSION={have!r} < 需要 "
+            f"{_REQUIRED_SCHEMA_VERSION!r}。gen 與 plan skill 須同 commit 部署。"
+        )
+    return mod
 
 
 def _import_prompt_derive():
@@ -170,6 +194,30 @@ def _slug_to_filename_prefix(slug: str, global_index: int) -> str:
     return f"{global_index:02d}_{slug}"
 
 
+_TRANSPARENT_ROUTES = ("rembg", "layerdiffuse", "vfx_additive")
+
+
+def _resolve_transparent(slug: str, ta_items: dict, ta_defaults: dict):
+    """回 (route, asset_type, transparent_params)。slug 不在 transparent_assets → route='none'。
+
+    BC-6：route 屬 rembg/layerdiffuse 但缺 asset_type → raise（防 semi fail-gate 被靜默跳過）。
+    """
+    entry = ta_items.get(slug)
+    if not entry:
+        return "none", None, None
+    route = entry.get("route", "none")
+    asset_type = entry.get("asset_type")
+    if route in _TRANSPARENT_ROUTES and not asset_type:
+        raise ValueError(
+            f"EH: transparent_assets 項 {slug!r} route={route!r} 缺 asset_type"
+            f"（必須 opaque 或 semi，BC-6）"
+        )
+    params = dict(ta_defaults)
+    params.update({k: v for k, v in entry.items() if k not in ("route", "asset_type", "params")})
+    params.update(entry.get("params") or {})
+    return route, asset_type, params
+
+
 def _expand_items(plan) -> list[ResolvedItem]:
     """Apply prefix/suffix (or skip if full?), expand seed_strategy.
 
@@ -185,6 +233,10 @@ def _expand_items(plan) -> list[ResolvedItem]:
     prefix = _norm_style(plan.style_prefix)
     suffix = _norm_style(plan.style_suffix)
     seed_seq = _build_seed_iter(plan.seed_strategy, len(plan.items))
+    # 透明素材 block（None=非透明 plan → 所有 item route='none'，現役行為零變化）。
+    ta = getattr(plan, "transparent_assets", None) or {}
+    ta_items = ta.get("items", {}) if isinstance(ta, dict) else {}
+    ta_defaults = ta.get("defaults", {}) if isinstance(ta, dict) else {}
     resolved: list[ResolvedItem] = []
     for i, item in enumerate(plan.items, start=1):
         if item.prompt == sentinel:
@@ -193,12 +245,16 @@ def _expand_items(plan) -> list[ResolvedItem]:
             final = item.prompt
         else:
             final = _join_prompt(prefix, item.prompt, suffix)
+        route, asset_type, transparent = _resolve_transparent(item.slug, ta_items, ta_defaults)
         resolved.append(ResolvedItem(
             index=i,
             slug=item.slug,
             final_prompt=final.strip(),
             seed=next(seed_seq),
             filename_prefix=_slug_to_filename_prefix(item.slug, i),
+            route=route,
+            asset_type=asset_type,
+            transparent=transparent,
         ))
     return resolved
 

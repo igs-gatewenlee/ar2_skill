@@ -88,6 +88,11 @@ SIZE_ASPECT_TO_SIZE: dict[str, tuple[int, int]] = {
     "portrait_2_3": (768, 1152),
 }
 
+# Plan dataclass / frontmatter 契約版本。跨 skill 消費者（gen/plan_loader）import 後
+# assert 此值 >= 其 REQUIRED，防 version drift 時 sibling-import 撿到舊版 module 而 silent
+# 漏欄（M-2）。新增/移除影響 Plan 序列化的欄位時 bump。
+SCHEMA_VERSION = "1.3.0"  # 1.3.0: 新增 transparent_assets（透明素材 route/asset_type block）
+
 
 @dataclass
 class Dimension:
@@ -186,6 +191,9 @@ class Plan:
     mode: str = "album"  # MODE_ENUM
     size_aspect: str | None = None  # SIZE_ASPECT_ENUM
     character_consistency: str = "prompt_only"  # CHARACTER_CONSISTENCY_ENUM
+    # 透明素材（Route A/B）per-asset 設定，opaque schema dict（{defaults, items}）。
+    # None=非透明 plan（現役行為零變化）。plan_loader 按 slug 映射到 ResolvedItem.route/asset_type。
+    transparent_assets: dict | None = None
 
 
 _ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
@@ -438,6 +446,7 @@ def _build_plan(fm: dict, sections: dict[str, str], path: Path) -> Plan:
         mode=mode,
         size_aspect=size_aspect,
         character_consistency=character_consistency,
+        transparent_assets=fm.get("transparent_assets"),
     )
 
 
@@ -573,6 +582,7 @@ def _plan_to_frontmatter(plan: Plan) -> dict[str, Any]:
         "tags": plan.tags or None,
         "provenance": plan.provenance,
         "promoted": plan.promoted,
+        "transparent_assets": plan.transparent_assets,  # M-3: round-trip（None 時略過）
     }
     for key, value in optional.items():
         if value is not None:

@@ -144,6 +144,7 @@ def test_submit_all_forwards_pulid_weight_to_inject(monkeypatch):
         mode="plan",
     )
 
-    plan_runner._submit_all({}, loaded, "run_x", face_ref_filename=None)
+    # T3：_submit_all 改收 per-route templates dict（route=none item → templates["none"]）
+    plan_runner._submit_all({"none": {}}, loaded, "run_x", face_ref_filename=None)
 
     assert captured.get("pulid_weight") == 1.5
