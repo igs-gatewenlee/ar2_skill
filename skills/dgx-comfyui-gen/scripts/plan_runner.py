@@ -17,6 +17,7 @@ from __future__ import annotations
 import copy
 import datetime
 import json
+import os
 import sys
 import time
 import uuid
@@ -40,6 +41,22 @@ _TRANSPARENT_ROUTE_WF = {
 # matte 前提：vfx_additive 須在純黑底產圖，dispatch 自動補此 prompt 後綴。
 _VFX_ADDITIVE_PROMPT_SUFFIX = ", on pure solid black background, no other objects"
 _TRANSPARENT_OUTPUT_DIR_NAME = "outputs/ar2-dgx-comfyui-transparent"
+
+
+def _output_root() -> Path:
+    """FU-1: anchor outputs to the Claude Code project root, not the drifting
+    cwd. Resolution priority:
+      1. $AR2_OUTPUT_ROOT   (explicit override; generate.py --out-root sets this)
+      2. $CLAUDE_PROJECT_DIR (Claude Code project root, when exposed to the env)
+      3. Path.cwd()          (fallback = legacy behavior)
+    Without an explicit anchor, cwd is used — so callers that cd away from the
+    project root (e.g. into a scratch ar2-runs dir) should set --out-root /
+    AR2_OUTPUT_ROOT, or run from the project root (see CLAUDE.md guidance)."""
+    for env in ("AR2_OUTPUT_ROOT", "CLAUDE_PROJECT_DIR"):
+        v = os.environ.get(env)
+        if v:
+            return Path(v).expanduser()
+    return Path.cwd()
 
 
 def _transparent_skill_dir() -> Path | None:
@@ -167,7 +184,7 @@ def _run(
         return 2
 
     # Poll + SCP per prompt sequentially (ComfyUI queues anyway).
-    local_root = Path.cwd() / LOCAL_OUTPUT_DIR_NAME / run_dir_name
+    local_root = _output_root() / LOCAL_OUTPUT_DIR_NAME / run_dir_name
     local_root.mkdir(parents=True, exist_ok=True)
     downloaded: list[str] = []
     print(f"\nPolling /history + SCP → {local_root}/ ...")
@@ -477,7 +494,7 @@ def _postprocess_transparent(item, item_files, run_dir_name: str, sub: dict) -> 
         category = tp.get("category", "asset")
         size = tp.get("size", "")
         asset_type = item.asset_type or ("semi" if route == "vfx_additive" else "opaque")
-        folder = (Path.cwd() / _TRANSPARENT_OUTPUT_DIR_NAME / run_dir_name
+        folder = (_output_root() / _TRANSPARENT_OUTPUT_DIR_NAME / run_dir_name
                   / f"{category}_{item.slug}")
         folder.mkdir(parents=True, exist_ok=True)
         if route == "vfx_additive":

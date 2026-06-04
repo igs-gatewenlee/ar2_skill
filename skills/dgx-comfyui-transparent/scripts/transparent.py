@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -32,7 +33,19 @@ from PIL import Image
 
 _SKILL_DIR = Path(__file__).resolve().parent.parent
 _WF = _SKILL_DIR / "workflows" / "route_a_rmbg.json"
-_OUT_ROOT = Path.cwd() / "outputs" / "ar2-dgx-comfyui-transparent"
+
+
+def _output_root() -> Path:
+    """FU-1: anchor outputs to CC project root, not drifting cwd.
+    $AR2_OUTPUT_ROOT > $CLAUDE_PROJECT_DIR > cwd (fallback = legacy)."""
+    for env in ("AR2_OUTPUT_ROOT", "CLAUDE_PROJECT_DIR"):
+        v = os.environ.get(env)
+        if v:
+            return Path(v).expanduser()
+    return Path.cwd()
+
+
+_OUT_ROOT = _output_root() / "outputs" / "ar2-dgx-comfyui-transparent"
 
 # sibling check/gen config.py, co-located in plugin skills/ (transparent/ → skills/).
 # config.py is gitignored but present on disk (intentional shared-DGX creds、不動內容)。

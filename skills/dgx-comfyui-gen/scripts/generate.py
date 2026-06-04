@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import os
 import secrets
 import sys
 import time
@@ -88,6 +89,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--poll-interval", type=float, default=1.0)
     p.add_argument("--timeout", type=float, default=1800.0,
                    help="Max seconds to wait for completion")
+    p.add_argument("--out-root", default=None, metavar="DIR",
+                   help="FU-1: 輸出根目錄（產物落 <DIR>/outputs/...）。"
+                        "預設用 $AR2_OUTPUT_ROOT / $CLAUDE_PROJECT_DIR / cwd")
     return p.parse_args()
 
 
@@ -147,6 +151,10 @@ def humanize_seconds(s: float) -> str:
 
 def main() -> int:
     args = parse_args()
+
+    # FU-1: explicit --out-root pins the output anchor (exported so plan_runner._output_root picks it up).
+    if args.out_root:
+        os.environ["AR2_OUTPUT_ROOT"] = str(Path(args.out_root).expanduser().resolve())
 
     # plan-driven mode early-return (BC-13/14)
     if args.plan is not None or args.preset is not None:
