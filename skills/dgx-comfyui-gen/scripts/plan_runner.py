@@ -59,6 +59,17 @@ def _output_root() -> Path:
     return Path.cwd()
 
 
+def _run_output_dir(output_dir_name: str, run_dir_name: str, item_count: int) -> Path:
+    """FU-2 輸出路徑：<root>/<output_dir_name>/<YYYY-MM-DD>[/<run_dir_name>]。
+
+    - 每日一個日期夾（本機時區）：同一天的 run 歸到同一日期夾、跨天自動分。
+    - C 折衷：單 item run（item_count==1）省略 run 層；多 item 批次保留 run 層歸組。
+    """
+    date = datetime.datetime.now().astimezone().strftime("%Y-%m-%d")
+    base = _output_root() / output_dir_name / date
+    return base if item_count == 1 else base / run_dir_name
+
+
 def _transparent_skill_dir() -> Path | None:
     """定位 sibling dgx-comfyui-transparent skill（co-located in plugin skills/）。"""
     skills_dir = Path(__file__).resolve().parent.parent.parent
@@ -184,14 +195,14 @@ def _run(
         return 2
 
     # Poll + SCP per prompt sequentially (ComfyUI queues anyway).
-    local_root = _output_root() / LOCAL_OUTPUT_DIR_NAME / run_dir_name
+    local_root = _run_output_dir(LOCAL_OUTPUT_DIR_NAME, run_dir_name, len(loaded.items))
     local_root.mkdir(parents=True, exist_ok=True)
     downloaded: list[str] = []
     print(f"\nPolling /history + SCP → {local_root}/ ...")
     print("  (Ctrl-C to detach; jobs continue on DGX)")
     try:
         for sub in succeeded_prompts:
-            _process_prompt(sub, local_root, run_dir_name, downloaded)
+            _process_prompt(sub, local_root, run_dir_name, downloaded, len(loaded.items))
     except KeyboardInterrupt:
         print("\n⚠️  detached from polling; DGX continues running queued items.")
         return 1
@@ -425,6 +436,7 @@ def _process_prompt(
     local_root: Path,
     run_dir_name: str,
     downloaded: list[str],
+    item_count: int,
 ) -> None:
     item = sub["item"]
     tag = f"  [{item.index:02d}] {item.slug}"
@@ -468,10 +480,11 @@ def _process_prompt(
 
     # 透明 route：source+mask 同一 prompt 內 → per-prompt postprocess（compose/QC，BC-11）
     if getattr(item, "route", "none") != "none":
-        _postprocess_transparent(item, item_files, run_dir_name, sub)
+        _postprocess_transparent(item, item_files, run_dir_name, sub, item_count)
 
 
-def _postprocess_transparent(item, item_files, run_dir_name: str, sub: dict) -> None:
+def _postprocess_transparent(item, item_files, run_dir_name: str, sub: dict,
+                             item_count: int) -> None:
     """本地後處理：source+mask → compose_rgba straight → fix_alpha → trim → final → QC。
 
     BC-11：source/mask 任一缺漏（鏈中途失敗）→ 標降級不 raise（不中斷整批）。
@@ -494,7 +507,7 @@ def _postprocess_transparent(item, item_files, run_dir_name: str, sub: dict) -> 
         category = tp.get("category", "asset")
         size = tp.get("size", "")
         asset_type = item.asset_type or ("semi" if route == "vfx_additive" else "opaque")
-        folder = (_output_root() / _TRANSPARENT_OUTPUT_DIR_NAME / run_dir_name
+        folder = (_run_output_dir(_TRANSPARENT_OUTPUT_DIR_NAME, run_dir_name, item_count)
                   / f"{category}_{item.slug}")
         folder.mkdir(parents=True, exist_ok=True)
         if route == "vfx_additive":
@@ -541,6 +554,11 @@ def _write_history(
         1 for s in submissions if s["prompt_id"] and "error" not in s
     )
     finished_at = _now_tz()
+    # FU-2: output_dir 反映新結構 <LOCAL_OUTPUT_DIR_NAME>/<date>[/<run>]（單 item 省 run）。
+    _date = datetime.datetime.now().astimezone().strftime("%Y-%m-%d")
+    _out_rel = Path(LOCAL_OUTPUT_DIR_NAME) / _date
+    if len(loaded.items) > 1:
+        _out_rel = _out_rel / run_dir_name
     prompt_records = [
         {
             "slug": s["item"].slug,
@@ -559,7 +577,7 @@ def _write_history(
         "items_succeeded": succeeded,
         "items_failed": len(loaded.items) - succeeded,
         "comfyui_prompt_ids": prompt_records,
-        "output_dir": str(Path(LOCAL_OUTPUT_DIR_NAME) / run_dir_name),
+        "output_dir": str(_out_rel),
     }
     with history_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")

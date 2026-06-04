@@ -157,8 +157,10 @@ def run_poc(args):
     if not src or not msk:
         raise SystemExit(f"❌ source/mask 前綴契約缺漏（BC-11）：src={src} msk={msk}")
 
-    # scp 兩檔
-    folder = asset_spec.asset_folder(_OUT_ROOT, tag, args.category, args.slug)
+    # scp 兩檔。FU-2：單發 PoC 為單 item → 用「日期夾」當層（省略 run/tag 層、符合 C 折衷），
+    # 落 <_OUT_ROOT>/<YYYY-MM-DD>/<category>_<slug>/。
+    _date = time.strftime("%Y-%m-%d")
+    folder = asset_spec.asset_folder(_OUT_ROOT, _date, args.category, args.slug)
     folder.mkdir(parents=True, exist_ok=True)
     out_dir = "/root/ComfyUI/output"
     for tagname, o in (("source", src), ("mask", msk)):

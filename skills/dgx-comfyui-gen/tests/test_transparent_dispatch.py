@@ -1,7 +1,11 @@
 """T3 per-route dispatch + M-1 前綴保留 + postprocess hook（BC-7 / BC-9 / BC-11）。"""
+import datetime
 import json
 import sys
 from pathlib import Path
+
+# FU-2: 單 item postprocess 輸出落 <root>/outputs/.../<date>/<cat_slug>（省 run 層）。
+_DATE = datetime.datetime.now().astimezone().strftime("%Y-%m-%d")
 
 import numpy as np
 import pytest
@@ -105,9 +109,9 @@ def test_postprocess_hook_produces_final(tmp_path, monkeypatch):
               transparent={"category": "symbol", "size": 512})
     sub = {"item": item}
     plan_runner._postprocess_transparent(
-        item, [src_dir / "img.png", msk_dir / "img.png"], run, sub)
+        item, [src_dir / "img.png", msk_dir / "img.png"], run, sub, 1)
     assert sub.get("qc_result") in ("pass", "warning", "fail")
-    out = tmp_path / "outputs/ar2-dgx-comfyui-transparent" / run / "symbol_coin"
+    out = tmp_path / "outputs/ar2-dgx-comfyui-transparent" / _DATE / "symbol_coin"
     assert (out / "report.json").exists()
     assert (out / "symbol_coin_512_v001.png").exists()
 
@@ -117,7 +121,7 @@ def test_bc11_missing_mask_degrades(tmp_path):
               route="rembg", asset_type="opaque", transparent={})
     sub = {"item": item}
     # 只有 source（mask 鏈失敗）→ 降級不 raise
-    plan_runner._postprocess_transparent(item, [tmp_path / "source" / "img.png"], "run", sub)
+    plan_runner._postprocess_transparent(item, [tmp_path / "source" / "img.png"], "run", sub, 1)
     assert "缺 mask" in sub.get("error", "")
 
 
@@ -155,8 +159,8 @@ def test_r4_semi_generates_previews(tmp_path, monkeypatch):
               route="layerdiffuse", asset_type="semi",
               transparent={"category": "vfx", "size": 1024})
     sub = {"item": item}
-    plan_runner._postprocess_transparent(item, [rgb_dir / "img.png", alpha_dir / "img.png"], run, sub)
-    out = tmp_path / "outputs/ar2-dgx-comfyui-transparent" / run / "vfx_smoke"
+    plan_runner._postprocess_transparent(item, [rgb_dir / "img.png", alpha_dir / "img.png"], run, sub, 1)
+    out = tmp_path / "outputs/ar2-dgx-comfyui-transparent" / _DATE / "vfx_smoke"
     assert (out / "preview_dark.png").exists() and (out / "preview_light.png").exists()
     import json
     rep = json.loads((out / "report.json").read_text())
@@ -194,8 +198,8 @@ def test_vfx_additive_postprocess_luminance(tmp_path, monkeypatch):
               route="vfx_additive", asset_type="semi", transparent={"category": "vfx", "size": 768})
     sub = {"item": item}
     # 只有 rgb（無 mask）→ luminance 分支不應誤判缺檔
-    plan_runner._postprocess_transparent(item, [rgb_dir / "img.png"], run, sub)
-    out = tmp_path / "outputs/ar2-dgx-comfyui-transparent" / run / "vfx_glow"
+    plan_runner._postprocess_transparent(item, [rgb_dir / "img.png"], run, sub, 1)
+    out = tmp_path / "outputs/ar2-dgx-comfyui-transparent" / _DATE / "vfx_glow"
     assert (out / "vfx_glow_768_v001.png").exists()
     assert (out / "preview_dark.png").exists() and (out / "preview_light.png").exists()
     assert sub.get("qc_result") in ("pass", "warning")  # 半透明不二值化 → 不 fail
