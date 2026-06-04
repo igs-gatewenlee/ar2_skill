@@ -65,6 +65,7 @@ ar2-skills/
 - ⛔ **不要** push 到任何**公開** repo（私網信任模型只在內網成立；公開分享或 DGX 對外暴露才需重審）
 - ✅ `config.py` 在每個 skill 的 `.gitignore` 第一行 + 本 repo top-level `.gitignore` 也排除
 - ✅ 各 skill 保留 `hooks/pre-commit` 攔 PASSWORD literal commit（既有安全網）
+- ⚠️ **plugin cache 暴露面**：local-path marketplace install 是**逐字 filesystem 複製、不遵守 .gitignore**——`config.py`（含明文密碼）會連同被複製進 `~/.claude/plugins/cache/`。gitignore 只擋 git，**擋不住 cache**。在共用 DGX 信任模型下（同機本地、刻意共享）可接受；但 ⛔ **不要分享該 cache 目錄、也不要用 `--plugin-dir *.zip` 打包散佈**（會把明文密碼嵌入散佈物）。需更強隔離時，改讓 check/gen/train/transparent 從 plugin tree 外（如 `~/.config/ar2/config.py`）讀 config。
 
 密碼旋轉（若需要）：先改 DGX → 改各 skill 的 config.py → 跑 `ar2:dgx-comfyui-check` 驗證。
 

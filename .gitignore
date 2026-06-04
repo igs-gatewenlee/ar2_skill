@@ -1,6 +1,12 @@
-# Python bytecode (any depth)
+# Python bytecode + test cache (any depth)
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# Closed-loop methodology artifacts — internal review notes, NOT shippable.
+# (methodology artifacts belong in the ai_cards dogfooding workspace; keeping
+# them untracked avoids git-clone plugin install bundling internal notes.)
+.claude-loop/
 
 # Per-skill credentials (each skill's own .gitignore also excludes config.py)
 **/config.py
