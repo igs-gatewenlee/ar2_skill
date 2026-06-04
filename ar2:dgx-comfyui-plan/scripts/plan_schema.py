@@ -927,10 +927,15 @@ def _validate_panel_type(value: Any, ctx: str, path: Path) -> str:
     return value
 
 
-def _validate_pulid_override(value: Any, ctx: str, path: Path) -> dict:
+def _validate_pulid_override(value: Any, ctx: str, path: Path) -> dict | None:
     """BC-G2-1/5: pulid override dict {enabled?, strength?, face_ref?} (partial OK).
 
-    Returns a normalized dict containing only the provided keys. Unknown keys →
+    Three-state key semantics (dev-review L1/L2): an EXPLICIT `null` value is
+    treated as "not provided" (same as an absent key) — the key is skipped so
+    the dispatch fallback chain runs (BC-G2-3), rather than short-circuiting to
+    None. An empty / all-null override declares nothing → returns None (so the
+    item is NOT elevated to v13 dispatch by _item_engages_v13_pulid_dispatch).
+    Returns a normalized dict of provided non-null keys, or None. Unknown keys →
     ValueError. strength reuses v1.2 _parse_pulid_weight bounds [0.0, 3.0].
     """
     value = _require_mapping(value, ctx, path)
@@ -941,24 +946,24 @@ def _validate_pulid_override(value: Any, ctx: str, path: Path) -> dict:
             f"allowed: {sorted(_PULID_OVERRIDE_ALLOWED_KEYS)}"
         )
     out: dict[str, Any] = {}
-    if "enabled" in value:
+    if value.get("enabled") is not None:  # explicit null = not provided
         enabled = value["enabled"]
         if not isinstance(enabled, bool):
             raise ValueError(
                 f"EH: {path}: {ctx}.enabled must be bool, got {type(enabled).__name__}"
             )
         out["enabled"] = enabled
-    if "strength" in value:
+    if value.get("strength") is not None:
         # BC-G2-5: reuse v1.2 pulid_weight bounds (raises on non-numeric / OOR).
         out["strength"] = _parse_pulid_weight(value["strength"])
-    if "face_ref" in value:
+    if value.get("face_ref") is not None:
         face_ref = value["face_ref"]
         if not isinstance(face_ref, str) or not face_ref:
             raise ValueError(
                 f"EH: {path}: {ctx}.face_ref must be a non-empty string, got {face_ref!r}"
             )
         out["face_ref"] = face_ref
-    return out
+    return out or None  # empty override → None (no v13 elevation, L1)
 
 
 def _validate_cast_in_panel(

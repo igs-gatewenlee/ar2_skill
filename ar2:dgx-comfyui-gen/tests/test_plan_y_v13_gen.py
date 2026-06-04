@@ -106,6 +106,23 @@ def test_v13_panel_taxonomy_enables_pulid():
     assert ri.pulid_strength == 1.2
 
 
+def test_v13_strength_default_end_to_end(monkeypatch):
+    """dev-review L10: v13 enabled=true with NO strength anywhere → effective
+    strength = default 1.0, and that 1.0 reaches inject's pulid_weight."""
+    plan = _plan(
+        panel_taxonomy={"hero": schema.PanelTypeConfig(pulid={"enabled": True})},
+    )
+    ri = _expand_one(plan, _item(panel_type="hero"))
+    assert ri.pulid_dispatch == "v13"
+    assert ri.pulid_enabled is True
+    assert ri.pulid_strength == 1.0  # _DISPATCH_DEFAULTS default
+    # end-to-end: 1.0 reaches inject (template has ApplyPulidFlux → alignment ok)
+    captured = _capture_inject(monkeypatch)
+    plan_runner._submit_all({"none": _pulid_template()}, _loaded([ri]), "run_x",
+                            plan_face_ref=None)
+    assert captured[0]["pulid_weight"] == 1.0
+
+
 # ---------- _submit_all caller mapping + gates ----------
 
 

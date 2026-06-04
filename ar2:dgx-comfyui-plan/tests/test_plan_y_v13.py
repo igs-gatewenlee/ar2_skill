@@ -280,6 +280,26 @@ class TestBCG2PulidOverride(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, r"out of range"):
                 ps.parse(_write_outline(Path(td), dd_yaml=dd))
 
+    def test_l1_empty_pulid_override_is_none(self):
+        """dev-review L1: empty `pulid: {}` → None (not a v13 declaration)."""
+        dd = "per_item_beats:\n  ch1_01_hero:\n    pulid: {}\n"
+        with tempfile.TemporaryDirectory() as td:
+            p = ps.parse(_write_outline(Path(td), dd_yaml=dd))
+        self.assertIsNone(p.items[0].pulid_override)
+
+    def test_l2_explicit_null_strength_skipped(self):
+        """dev-review L2: explicit `strength: null` = not provided → key absent
+        so the dispatch fallback chain runs (not short-circuited to None)."""
+        dd = ("per_item_beats:\n  ch1_01_hero:\n"
+              "    pulid: {enabled: true, strength: null}\n")
+        with tempfile.TemporaryDirectory() as td:
+            p = ps.parse(_write_outline(Path(td), dd_yaml=dd))
+        self.assertEqual(p.items[0].pulid_override, {"enabled": True})
+        # strength falls through to default 1.0 (no plan pulid_weight set)
+        plan = replace(p, pulid_weight=None)
+        val, src = ps._resolve_per_item_config(plan, plan.items[0], "pulid.strength")
+        self.assertEqual((val, src), (1.0, "default"))
+
 
 # ============================================================
 # BC-G5 / EH-G5: event validation

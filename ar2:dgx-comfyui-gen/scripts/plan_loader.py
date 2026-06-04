@@ -306,8 +306,13 @@ def _resolve_dispatch(
             strength, face_ref = None, None  # BC-G2-7
         return workflow_override, bool(enabled), strength, face_ref, "v13"
 
-    # legacy: byte-equivalent v1.2 — plan-level pulid_weight + face_ref.
-    enabled = schema._pulid_enabled_from_consistency(plan.character_consistency)
+    # legacy: byte-equivalent v1.2 — plan-level pulid_weight + face_ref straight
+    # to inject. pulid_enabled here reflects whether PuLID *inputs* are present
+    # (honest effective signal, dev-review L9) rather than the unreliable
+    # character_consistency default — but it is NOT consumed for legacy (the
+    # EH-G1-2 gate early-returns unless pulid_dispatch=='v13'); a future consumer
+    # must check pulid_dispatch first.
+    enabled = plan.face_ref is not None or plan.pulid_weight is not None
     return workflow_override, enabled, plan.pulid_weight, plan.face_ref, "legacy"
 
 

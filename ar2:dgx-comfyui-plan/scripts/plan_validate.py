@@ -28,6 +28,9 @@ import plan_schema as ps
 _WEAK_EVENT_TYPES = ("mood", "transition")
 # dispatch dims checked for item ↔ panel_taxonomy double-write (BC-G5-4 C2).
 # beat_prefix/suffix have no item-layer source → never double-written; omitted.
+# NOTE (dev-review L4): spec BC-G5-4 C2 text lists cast_in_panel, but
+# PanelTypeConfig has no cast_in_panel field — it is structurally impossible to
+# double-write, so it is intentionally excluded here (not a missing impl).
 _C2_DIMS = ("workflow", "pulid.enabled", "pulid.strength", "pulid.face_ref")
 
 
