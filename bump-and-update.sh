@@ -65,7 +65,7 @@ if [ "$DRY" = "1" ]; then
   echo "   [dry-run] 會寫 $PLUGIN_JSON version=$NEW_VER"
   [ "$COMMIT" = "1" ] && echo "   [dry-run] 會 git commit 版本 bump"
   echo "   [dry-run] 會跑：claude plugin marketplace update $MARKET_NAME"
-  echo "   [dry-run] 會跑：claude plugin update $PLUGIN_NAME"
+  echo "   [dry-run] 會跑：claude plugin update $PLUGIN_NAME@$MARKET_NAME"
   exit 0
 fi
 
@@ -88,7 +88,9 @@ fi
 
 echo "🔄 claude plugin marketplace update $MARKET_NAME ..."
 claude plugin marketplace update "$MARKET_NAME"
-echo "⬆️  claude plugin update $PLUGIN_NAME ..."
-claude plugin update "$PLUGIN_NAME"
+# 注意：plugin update 要用「限定名」plugin@marketplace（installed_plugins.json
+# 的鍵就是 ar2@ar2-marketplace；裸名會 "Plugin not found"）。
+echo "⬆️  claude plugin update $PLUGIN_NAME@$MARKET_NAME ..."
+claude plugin update "$PLUGIN_NAME@$MARKET_NAME"
 
-echo "✅ done ($PLUGIN_NAME @ $NEW_VER) — 重啟 Claude Code 或在 session 內 /reload-plugins 套用"
+echo "✅ done ($PLUGIN_NAME@$MARKET_NAME @ $NEW_VER) — 重啟 Claude Code 或在 session 內 /reload-plugins 套用"
