@@ -1,78 +1,75 @@
 # ar2-skills
 
-`ar2:*` 家族 — 個人 Claude Code skill 集。獨立 git repo，可被任何 project 透過 `.claude/skills/` symlink install。
+`ar2:*` 家族 — 個人 Claude Code **plugin**（name=`ar2`）。獨立 git repo，同時是自己的 local-path marketplace。磁碟目錄零冒號（跨平台可攜，含 Windows）；呼叫名 `ar2:dgx-comfyui-*` 由 plugin namespace 合成。
 
 ## 家族成員
 
-| Skill | 用途 | Status |
+| Skill（呼叫名） | 用途 | Status |
 |-------|------|--------|
 | 🩺 `ar2:dgx-comfyui-check` | DGX 機器體檢 + ComfyUI 13 分類模型盤點 | stable |
 | 🎨 `ar2:dgx-comfyui-gen` | 在 DGX 上跑 ComfyUI workflow 產圖，成品拉回本機 | stable |
+| 🗂️ `ar2:dgx-comfyui-plan` | 計畫驅動批次產圖（outline.md plan / preset 庫 / Design Dimensions） | stable |
 | 🎓 `ar2:dgx-comfyui-train` | 在 DGX 上訓 Flux LoRA + 訓完自動部署 | beta |
-| 🗂️ `ar2:skill-overview` | 家族視覺化知識庫入口（這個 HTML 就是它生的）| experimental |
+| 🖼️ `ar2:dgx-comfyui-transparent` | 產帶真實 Alpha 的透明遊戲素材（去背 / VFX 加色） | beta |
 
-典型工作流：**check** → **gen** / **train**（check 確認環境健康後再產圖或訓練）。
+典型工作流：**check** → **plan** → **gen** / **train** / **transparent**。
 
-## Install 到一個 project
+## Install（plugin marketplace）
 
-在你的 Claude Code project 根目錄執行：
+本 repo 自帶 `.claude-plugin/marketplace.json`，可直接當 local-path marketplace。在 Claude Code 內：
 
-```bash
-bash /path/to/ar2-skills/install-to.sh /path/to/your-project
+```
+/plugin marketplace add /Users/gatewenlee/Code/ar2-skills
+/plugin install ar2@ar2-marketplace
 ```
 
-這會：
-1. 在 project 內建 `.claude/skills/` 目錄（如不存在）
-2. 為每個 `ar2:*` skill 建 absolute symlink 指向 `~/Code/ar2-skills/ar2:*`
-3. 為 `ar2:dgx-comfyui-*` 的 `config.py` 設 chmod 600（含 DGX 密碼）
+裝好後 5 個 `ar2:dgx-comfyui-*` skill 即自動發現（`skills/` 下每個 `SKILL.md` 一個）、description 自動觸發。
 
-完成後重啟 Claude Code 在該 project 內，4 個 `ar2:*` slash command 就會出現。
+> **注意（copy-to-cache）**：marketplace 安裝會把 plugin 複製到 `~/.claude/plugins/cache/`，源檔 Edit **不會即時生效**。改完源碼後跑 `/plugin update ar2`（需 bump `.claude-plugin/plugin.json` 的 `version`）。
 
-驗證：對話內試「打開 ar2 家族總覽」（會 invoke `ar2:skill-overview`）。
+**開發模式（源檔即時生效）**：用 `--plugin-dir` 直接載入、不走 cache：
+
+```bash
+claude --plugin-dir /Users/gatewenlee/Code/ar2-skills
+# 改完源碼後在 session 內：
+/reload-plugins
+```
 
 ## 個別 skill 文件
 
-- 每個 `ar2:*/` 下都有：
-  - `SKILL.md`（給 Claude Code 看的 invocation 指令 + 行為描述）
-  - `OVERVIEW.md`（給用戶看的白話介紹 — 一句話 / 何時用 / 怎麼用 / 踩坑）
-
-讀 `ar2:*/OVERVIEW.md` 認識每個 skill。或 install 後 invoke `ar2:skill-overview` 看 HTML 總覽。
+每個 `skills/<skill>/` 下都有：
+- `SKILL.md`（給 Claude Code 看的 invocation 指令 + 行為描述；`name:` 為裸名、呼叫時加 `ar2:` 前綴）
+- `OVERVIEW.md`（給用戶看的白話介紹 — 一句話 / 何時用 / 怎麼用 / 踩坑）
 
 ## 結構
 
 ```
 ar2-skills/
-├── README.md                       ← this
-├── .gitignore                      ← 排除 config.py / __pycache__ / cache
-├── install-to.sh                   ← 把 ar2:* symlink 到指定 project
-├── ar2:dgx-comfyui-check/
-│   ├── SKILL.md, OVERVIEW.md, config.py (gitignored), .gitignore, hooks/, scripts/, references/
-├── ar2:dgx-comfyui-gen/
-├── ar2:dgx-comfyui-train/
-└── ar2:skill-overview/
+├── README.md                        ← this
+├── .gitignore                       ← 排除 config.py / __pycache__ / cache
+├── .claude-plugin/
+│   ├── plugin.json                  ← plugin 元資料（name=ar2）
+│   └── marketplace.json             ← local-path marketplace 清單
+└── skills/
+    ├── dgx-comfyui-check/           ← SKILL.md, OVERVIEW.md, config.py(gitignored), scripts/, references/, hooks/
+    ├── dgx-comfyui-gen/
+    ├── dgx-comfyui-plan/
+    ├── dgx-comfyui-train/
+    └── dgx-comfyui-transparent/
 ```
 
-## 安全
+## 安全（私網信任模型）
 
-`ar2:dgx-comfyui-{check,gen,train}` 內各有 `config.py` 含 DGX 明文密碼（私網信任模型）：
+`dgx-comfyui-{check,gen,train}` 內各有 `config.py` 含 DGX（`192.168.5.27`）明文密碼。DGX 是**刻意共用機**（私網內人人可用、`root/root`），非洩漏——明文密碼為設計選擇，**不做 secret scrub / 換密碼**。
 
-- ⛔ **不要** push 到任何公開 / 共享 repo
-- ⛔ **不要** publish 個別 skill 到 ClawHub / skill marketplace
+- ⛔ **不要** push 到任何**公開** repo（私網信任模型只在內網成立；公開分享或 DGX 對外暴露才需重審）
 - ✅ `config.py` 在每個 skill 的 `.gitignore` 第一行 + 本 repo top-level `.gitignore` 也排除
-- ✅ install-to.sh 自動 chmod 600 限制權限
-- 各 skill 都有 `hooks/pre-commit` 攔 PASSWORD literal commit
+- ✅ 各 skill 保留 `hooks/pre-commit` 攔 PASSWORD literal commit（既有安全網）
 
-密碼旋轉：先改 DGX → 改 4 個 skill 的 config.py（同一密碼複製 4 份）→ 跑 `ar2:dgx-comfyui-check` 驗證。
+密碼旋轉（若需要）：先改 DGX → 改各 skill 的 config.py → 跑 `ar2:dgx-comfyui-check` 驗證。
 
 ## 與 ai_cards workspace 的關係
 
-本 repo 從 `~/Code/ai_cards/skills/ar2:*` 抽離（2026-05-15）。歷史 commit 在 ai_cards repo 內保留，本 repo 從現狀起跑。
+本 repo 從 `~/Code/ai_cards/skills/ar2:*` 抽離（2026-05-15），2026-06-04 遷移為 plugin。ai_cards 是 dogfooding workspace（閉環方法論 + 在此消費 ar2 plugin）；ar2-skills 是 source repo + marketplace，可被多 project 共用。
 
-ai_cards 仍保有：
-- `CLAUDE.md`（閉環方法論）
-- `.claudedocs/`（補充文檔）
-- `design/`（ar2:dgx-comfyui-* 設計 plan v1）
-- `.claude-loop/`（閉環 artifacts + learning-log）
-- `.claude/skills/ar2:*`（symlink 指向本 repo）
-
-ai_cards 是 dogfooding workspace（開發閉環方法論 + 在此 workspace 內 install ar2:*）；ar2-skills 是 source repo 可被多 project 共用。
+ai_cards 仍保有 `CLAUDE.md`（閉環方法論）/ `.claudedocs/` / `.claude-loop/`（artifacts + learning-log）。消費端改接 plugin 後，舊 `.claude/skills/ar2:*` symlink 已不需要（見遷移 spec S7）。

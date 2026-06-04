@@ -1,0 +1,16 @@
+{
+  "name": "ar2-marketplace",
+  "owner": {
+    "name": "gatewen"
+  },
+  "metadata": {
+    "description": "ar2 — DGX/ComfyUI 圖像生成 skill 家族（本機 local-path marketplace）"
+  },
+  "plugins": [
+    {
+      "name": "ar2",
+      "source": "./",
+      "description": "DGX/ComfyUI 圖像生成 skill 家族（check 機器體檢 / gen 產圖 / plan 計畫 / train Flux LoRA / transparent 透明素材）"
+    }
+  ]
+}
