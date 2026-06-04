@@ -45,6 +45,15 @@ def _iter_nodes(workflow: dict):
             yield nid, node
 
 
+def has_pulid_node(workflow: dict) -> bool:
+    """Plan Y v1.3 (BC-G2-6 / EH-G1-2): True iff workflow contains an
+    ApplyPulidFlux node. Caller (plan_runner) uses this to verify effective
+    workflow ↔ effective pulid_enabled alignment BEFORE inject. Node-class
+    knowledge stays in workflow_params (single source). inject signature is
+    unchanged (DR-1 方案 c)."""
+    return bool(_find_nodes_by_class(workflow, "ApplyPulidFlux"))
+
+
 def _find_nodes_by_class(workflow: dict, class_type: str) -> list[tuple[str, dict]]:
     """Find all nodes of a given class_type, sorted by node id (numeric if possible)."""
     matches = [(nid, n) for nid, n in _iter_nodes(workflow) if n["class_type"] == class_type]

@@ -31,6 +31,14 @@ class ResolvedItem:
     route: str = "none"  # "none" | "rembg" | "layerdiffuse"
     asset_type: str | None = None  # "opaque" | "semi"（route≠none 時必填，BC-6）
     transparent: dict | None = None  # 合併 defaults+item params（category/size/bg_remove_strength…）
+    # ─── Plan Y v1.3 per-item dispatch（皆已 resolve、effective values、IF-G3）───
+    workflow_override: str | None = None  # BC-G1-2: None → gen 用 LoadedPlan.workflow
+    pulid_enabled: bool = False           # BC-G2-2 (effective、供 EH-G1-2 對齊驗證)
+    pulid_strength: float | None = None   # BC-G2-7: enabled=false → None（無 plan fallback）
+    pulid_face_ref: str | None = None     # BC-G2-7: enabled=false → None
+    # "v13" → 套 BC-G2-7 force-None + EH-G1-2 gate；"legacy" → 精確 v1.2 passthrough
+    # （BC-G0 reconciliation，見 plan_schema._item_engages_v13_pulid_dispatch）。
+    pulid_dispatch: str = "legacy"
 
 
 @dataclass
@@ -52,8 +60,9 @@ class LoadedPlan:
 _PLAN_SCHEMA_MODULE_NAME = "ar2_plan_schema"
 _PROMPT_DERIVE_MODULE_NAME = "ar2_prompt_derive"
 
-# gen 需要的 plan_schema 最低契約版本（M-2）。plan_schema 加 transparent_assets = 1.3.0。
-_REQUIRED_SCHEMA_VERSION = "1.3.0"
+# gen 需要的 plan_schema 最低契約版本（M-2）。Plan Y v1.3 加 panel_taxonomy /
+# cast / plan_quality + 7 Item 新欄位 + _resolve_per_item_config helper = 1.4.0。
+_REQUIRED_SCHEMA_VERSION = "1.4.0"
 
 
 def _version_tuple(v: str) -> tuple[int, ...]:
@@ -229,6 +238,7 @@ def _expand_items(plan) -> list[ResolvedItem]:
     M1 IF-1's "no unescaped `|`" post-condition).
     """
     prompt_derive = _import_prompt_derive()  # BC-G6: eager
+    schema = _import_plan_schema()  # Plan Y v1.3: per-item dispatch resolver (DR-4)
     sentinel = prompt_derive.DERIVED_SENTINEL
     prefix = _norm_style(plan.style_prefix)
     suffix = _norm_style(plan.style_suffix)
@@ -246,6 +256,9 @@ def _expand_items(plan) -> list[ResolvedItem]:
         else:
             final = _join_prompt(prefix, item.prompt, suffix)
         route, asset_type, transparent = _resolve_transparent(item.slug, ta_items, ta_defaults)
+        wf_override, p_enabled, p_strength, p_face_ref, p_dispatch = (
+            _resolve_dispatch(schema, plan, item)
+        )
         resolved.append(ResolvedItem(
             index=i,
             slug=item.slug,
@@ -255,8 +268,47 @@ def _expand_items(plan) -> list[ResolvedItem]:
             route=route,
             asset_type=asset_type,
             transparent=transparent,
+            workflow_override=wf_override,
+            pulid_enabled=p_enabled,
+            pulid_strength=p_strength,
+            pulid_face_ref=p_face_ref,
+            pulid_dispatch=p_dispatch,
         ))
     return resolved
+
+
+def _resolve_dispatch(
+    schema, plan, item,
+) -> tuple[str | None, bool, float | None, str | None, str]:
+    """Plan Y v1.3 per-item dispatch (BC-G1-4 / BC-G2-3 / BC-G2-7) via the shared
+    DR-4 helper. Returns (workflow_override, pulid_enabled, pulid_strength,
+    pulid_face_ref, pulid_dispatch).
+
+    workflow_override: effective value ONLY when sourced from item/panel_type
+    layer; plan-level → None (gen-side falls back to LoadedPlan.workflow, IF-G3).
+
+    pulid: two paths (BC-G0 reconciliation, ground-truthed cards_a11c):
+    - "v13" (item/panel_type explicitly declares pulid/workflow intent):
+      BC-G2-3 conditional resolution + BC-G2-7 force-None when disabled;
+      plan_runner applies EH-G1-2 workflow↔enabled alignment gate.
+    - "legacy" (no v1.3 declaration): EXACT v1.2 passthrough — plan-level
+      pulid_weight + face_ref, no force-None, no EH-G1-2 gate.
+    """
+    wf_val, wf_src = schema._resolve_per_item_config(plan, item, "workflow")
+    workflow_override = wf_val if wf_src in ("item", "panel_type") else None
+
+    if schema._item_engages_v13_pulid_dispatch(plan, item):
+        enabled, _ = schema._resolve_per_item_config(plan, item, "pulid.enabled")
+        if enabled:
+            strength, _ = schema._resolve_per_item_config(plan, item, "pulid.strength")
+            face_ref, _ = schema._resolve_per_item_config(plan, item, "pulid.face_ref")
+        else:
+            strength, face_ref = None, None  # BC-G2-7
+        return workflow_override, bool(enabled), strength, face_ref, "v13"
+
+    # legacy: byte-equivalent v1.2 — plan-level pulid_weight + face_ref.
+    enabled = schema._pulid_enabled_from_consistency(plan.character_consistency)
+    return workflow_override, enabled, plan.pulid_weight, plan.face_ref, "legacy"
 
 
 def _resolve_derived(prompt_derive, plan, item, index: int) -> str:

@@ -109,7 +109,10 @@ def test_inject_int_weight_coerced_to_float(flux_pulid_workflow):
 # ---------- BC-8: _submit_all forwards loaded.pulid_weight to inject ----------
 
 def test_submit_all_forwards_pulid_weight_to_inject(monkeypatch):
-    """BC-8: _submit_all must pass loaded.pulid_weight as kwarg to inject."""
+    """BC-G2-7 (Plan Y v1.3): _submit_all forwards ResolvedItem.pulid_strength
+    as inject's pulid_weight (dispatch strength → runtime weight), NOT
+    loaded.pulid_weight. For a legacy item, _expand_items sets pulid_strength =
+    plan.pulid_weight, so the effective value stays byte-equivalent to v1.2."""
     captured: dict = {}
 
     def fake_inject(workflow_template, **kwargs):
@@ -122,13 +125,15 @@ def test_submit_all_forwards_pulid_weight_to_inject(monkeypatch):
     monkeypatch.setattr(plan_runner, "inject", fake_inject)
     monkeypatch.setattr(plan_runner.api, "submit_prompt", fake_submit_prompt)
 
-    # Minimal LoadedPlan + one ResolvedItem
+    # Minimal LoadedPlan + one ResolvedItem (legacy: pulid_strength carries the
+    # plan-level pulid_weight as _expand_items would have set it).
     item = plan_runner.plan_loader.ResolvedItem(
         index=1,
         slug="x",
         final_prompt="p",
         seed=42,
         filename_prefix="01_x",
+        pulid_strength=1.5,
     )
     loaded = plan_runner.plan_loader.LoadedPlan(
         raw=None,
@@ -145,6 +150,6 @@ def test_submit_all_forwards_pulid_weight_to_inject(monkeypatch):
     )
 
     # T3：_submit_all 改收 per-route templates dict（route=none item → templates["none"]）
-    plan_runner._submit_all({"none": {}}, loaded, "run_x", face_ref_filename=None)
+    plan_runner._submit_all({"none": {}}, loaded, "run_x", plan_face_ref=None)
 
     assert captured.get("pulid_weight") == 1.5

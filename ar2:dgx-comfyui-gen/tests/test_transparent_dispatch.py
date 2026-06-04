@@ -57,7 +57,7 @@ def test_bc7_route_none_dispatch_unchanged(monkeypatch):
     monkeypatch.setattr(plan_runner, "inject", lambda wf, **kw: captured.append(kw) or wf)
     monkeypatch.setattr(plan_runner.api, "submit_prompt", lambda w, c: ("pid", 0, {}))
     item = RI(index=1, slug="x", final_prompt="p", seed=1, filename_prefix="01_x")
-    plan_runner._submit_all({"none": {}}, _loaded([item]), "run_x", face_ref_filename=None)
+    plan_runner._submit_all({"none": {}}, _loaded([item]), "run_x", plan_face_ref=None)
     kw = captured[0]
     assert kw["output_subdir"] == "run_x"            # 原行為保留
     assert kw["filename_prefix_override"] == "01_x"
@@ -72,7 +72,7 @@ def test_transparent_dispatch_passes_double_none(monkeypatch):
               route="rembg", asset_type="opaque", transparent={"bg_remove_strength": 0.7})
     tmpl = {"1": {"class_type": "SaveImage",
                   "inputs": {"filename_prefix": "{run_subdir}/source/img"}}}
-    plan_runner._submit_all({"rembg": tmpl}, _loaded([item]), "run_x", face_ref_filename=None)
+    plan_runner._submit_all({"rembg": tmpl}, _loaded([item]), "run_x", plan_face_ref=None)
     kw = captured[0]
     assert kw["output_subdir"] is None and kw["filename_prefix_override"] is None  # M-1
     assert kw["bg_remove_strength"] == 0.7
@@ -133,7 +133,7 @@ def test_r1_transparent_ignores_negative(monkeypatch):
                   "inputs": {"filename_prefix": "{run_subdir}/source/img"}}}
     # 設了非空 negative — 不應導致 inject 收到 negative（否則單 encoder workflow raise）
     plan_runner._submit_all({"rembg": tmpl}, _loaded([item], negative="ugly, blurry"),
-                            "run_x", face_ref_filename=None)
+                            "run_x", plan_face_ref=None)
     assert captured[0]["negative_prompt"] is None
 
 
@@ -174,7 +174,7 @@ def test_vfx_additive_dispatch_black_bg_suffix(monkeypatch):
               transparent={"category": "vfx", "size": 768})
     tmpl = {"3": {"class_type": "CLIPTextEncode", "inputs": {"text": ""}},
             "13": {"class_type": "SaveImage", "inputs": {"filename_prefix": "{run_subdir}/rgb/img"}}}
-    plan_runner._submit_all({"vfx_additive": tmpl}, _loaded([item]), "run_x", face_ref_filename=None)
+    plan_runner._submit_all({"vfx_additive": tmpl}, _loaded([item]), "run_x", plan_face_ref=None)
     wf, kw = captured[0]
     assert "black background" in kw["prompt"].lower()   # 自動補黑底（matte 前提）
     assert kw.get("bg_remove_strength") is None          # 無 rembg 節點

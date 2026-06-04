@@ -1,0 +1,23 @@
+"""BC-G0-4 frozen v1.2 regression baseline (Plan Y v1.3 Phase 2).
+
+DO NOT EDIT the expected strings. Captured ONCE by the v1.2 parser
+(plan_schema + prompt_derive, pre-v1.3-field state) against the copied
+`dragon_hunt_ensemble_outline.md` fixture. The v1.3 parser MUST produce
+byte-identical derive output for these 5 representative items.
+
+Per BC-G0-6: if a future test mismatch occurs, FIRST suspect a v1.3 parser
+regression — NOT that this baseline is stale. Only re-freeze if the v1.2
+parser itself is intentionally bug-fixed (separate closed loop).
+
+5 slugs cover: same-group + cross-group (cross_group_progression dispatch),
+storyboard locked->beat->per_group order, ensemble scope mix.
+"""
+
+# slug -> expected derive_prompt(plan, item) output (v1.2 byte-equivalent)
+EXPECTED_DERIVE = {
+    'ch1_03_recruit_mage': 'medium-length brown hair with short ponytail at the back (for the male protagonist), golden breastplate with dragon emblem and dark blue cape (for the male protagonist), manga panel illustration, detailed inked lineart, atmospheric color, dramatic dynamic framing, multi-character clarity, muted earth tones with dramatic accent colors, gold for hero, indigo for mage, red for warrior, white for healer, scarlet for dragon, manga panel two-shot of the protagonist meeting a young female mage with long indigo-purple hair holding an ornate wooden staff in a tower study, both at eye-level, mage gesturing while explaining, shelves of glowing tomes behind, warm interior light, both characters clearly distinct with different hair colors and outfits',
+    'ch1_06_team_briefing': 'medium-length brown hair with short ponytail at the back (for the male protagonist), golden breastplate with dragon emblem and dark blue cape (for the male protagonist), manga panel illustration, detailed inked lineart, atmospheric color, dramatic dynamic framing, multi-character clarity, muted earth tones with dramatic accent colors, gold for hero, indigo for mage, red for warrior, white for healer, scarlet for dragon, manga panel ensemble shot of four party members around a wooden table with a spread parchment map, protagonist leaning forward pointing at a route, indigo-haired mage holding her staff listening, red-haired warrior with great sword crossed-arms, blonde healer in white robes standing beside, overhead three-quarter angle, candlelit war-room atmosphere, all four characters clearly visible',
+    'ch1_11_first_camp': 'medium-length brown hair with short ponytail at the back (for the male protagonist), golden breastplate with dragon emblem and dark blue cape (for the male protagonist), manga panel illustration, detailed inked lineart, atmospheric color, dramatic dynamic framing, multi-character clarity, muted earth tones with dramatic accent colors, gold for hero, indigo for mage, red for warrior, white for healer, scarlet for dragon, manga panel ensemble of four party members around a crackling campfire at night, protagonist sharpening his sword, indigo-haired mage reading by firelight, red-haired warrior whittling a stick, blonde healer mending a cloak, intimate eye-level circle, starry night background, all four characters clearly visible',
+    'ch2_02_old_marker': 'medium-length brown hair with short ponytail at the back (for the male protagonist), golden breastplate with dragon emblem and dark blue cape (for the male protagonist), manga panel illustration, detailed inked lineart, atmospheric color, dramatic dynamic framing, multi-character clarity, muted earth tones with dramatic accent colors, gold for hero, indigo for mage, red for warrior, white for healer, scarlet for dragon, manga panel group shot of four party members gathered around a weathered stone marker, protagonist kneeling and brushing moss off ancient runes while indigo-haired mage leans in to read, red-haired warrior keeping watch, blonde healer touching the stone reverently, three-quarter angle, soft diffused mountain light',
+    'ch2_04_river_crossing': 'medium-length brown hair with short ponytail at the back (for the male protagonist), golden breastplate with dragon emblem and dark blue cape (for the male protagonist), manga panel illustration, detailed inked lineart, atmospheric color, dramatic dynamic framing, multi-character clarity, muted earth tones with dramatic accent colors, gold for hero, indigo for mage, red for warrior, white for healer, scarlet for dragon, manga panel dynamic action shot of four party members wading through a rushing icy river holding hands for stability, protagonist leading in front, indigo-haired mage holding her staff overhead behind him, red-haired warrior in the middle, blonde healer at the back, water spraying around their legs, motion blur on water, dramatic side angle',
+}

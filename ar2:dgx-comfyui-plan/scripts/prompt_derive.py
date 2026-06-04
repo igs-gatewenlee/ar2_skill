@@ -34,7 +34,9 @@ import sys
 from typing import Callable
 
 from plan_schema import (
+    _CAST_VISUAL_BUDGET_PER_PLAN,
     _LAYER_A_DIMENSION_NAMES,
+    _resolve_per_item_config,
     Dimension,
     Item,
     LayerB,
@@ -97,8 +99,12 @@ def _derive_album(plan: Plan, item: Item) -> str:
         )
 
     group_key = _extract_group_key(item.slug)
-    parts: list[str] = []
+    # BC-G4-3: cast visual prepend (order: cast → locked → per_group).
+    parts: list[str] = _cast_prefix_parts(plan, item)
+    overridden = _protagonist_overrides(plan, item)  # BC-G4-4
     for dim_name in _LAYER_A_DIMENSION_NAMES:
+        if dim_name in overridden:
+            continue  # cast.protagonist.visual.{key} > visual_lock.{key}
         dim: Dimension = getattr(plan.layer_a, dim_name)
         value = _resolve_dimension(dim, dim_name, plan.layer_b, group_key)
         if value:
@@ -128,12 +134,21 @@ def _derive_storyboard(plan: Plan, item: Item) -> str:
         )
 
     group_key = _extract_group_key(item.slug)
-    parts: list[str] = []
+    # BC-G4-3 order: cast → locked → [beat_prefix] → beat → per_group → [beat_suffix].
+    parts: list[str] = _cast_prefix_parts(plan, item)
+    overridden = _protagonist_overrides(plan, item)  # BC-G4-4
     # Step 1: locked dims (visual base anchors)
     for dim_name in _STORYBOARD_LOCKED_DIMS:
+        if dim_name in overridden:
+            continue  # cast.protagonist.visual.{key} > visual_lock.{key}
         dim: Dimension = getattr(plan.layer_a, dim_name)
         if dim.scope == "locked" and dim.value:
             parts.append(dim.value)
+
+    # BC-G6-2/3: beat_prefix before beat (storyboard only, use_template gate).
+    beat_prefix, beat_suffix = _beat_templates(plan, item)
+    if beat_prefix:
+        parts.append(beat_prefix)
 
     # Step 2: item.beat_description OR fallback to cross_group_progression
     has_beat = item.beat_description is not None
@@ -162,6 +177,10 @@ def _derive_storyboard(plan: Plan, item: Item) -> str:
             f"have beat_description, or plan to define cross_group_progression"
         )
 
+    # BC-G6-2: beat_suffix after per_group dims.
+    if beat_suffix:
+        parts.append(beat_suffix)
+
     if not parts:
         raise ValueError(
             f"EH-6: derived prompt would be empty for item {item.slug!r}"
@@ -188,6 +207,69 @@ def _append_per_group_dims(
         value = per_dim.get(group_key)
         if value:
             parts.append(value)
+
+
+def _cast_prefix_parts(plan: Plan, item: Item) -> list[str]:
+    """BC-G4-3 + EH-G4-4 (per-plan budget): cast visual fragments to prepend.
+
+    Returns [] when item.cast_in_panel empty or plan.cast absent. Per-value
+    char boundaries are already enforced input-side (BC-G4-6); here we enforce
+    the cumulative per-plan budget (≤ 1500) and name the offending cast list.
+    """
+    if not item.cast_in_panel or not plan.cast:
+        return []
+    parts: list[str] = []
+    total = 0
+    for cid in item.cast_in_panel:
+        entry = plan.cast.get(cid)
+        if entry is None:
+            # parse-time EH-G4-1 should prevent this; defensive.
+            raise ValueError(
+                f"EH-G4-1: unknown character {cid!r} in cast_in_panel for "
+                f"item {item.slug!r}"
+            )
+        for value in entry.visual.values():
+            parts.append(value)
+            total += len(value)
+    if total > _CAST_VISUAL_BUDGET_PER_PLAN:
+        raise ValueError(
+            f"EH-G4-4: item {item.slug!r} cast prepend 累加 {total} chars > "
+            f"{_CAST_VISUAL_BUDGET_PER_PLAN} budget（cast_in_panel="
+            f"{item.cast_in_panel}）；derive 後會超 IF-G2 2000 chars 上限"
+        )
+    return parts
+
+
+def _protagonist_overrides(plan: Plan, item: Item) -> set[str]:
+    """BC-G4-4: cast.protagonist.visual.{key} > visual_lock.{key}.value.
+
+    Returns the set of visual_lock dimension names that the protagonist entry
+    (when present in cast_in_panel) overrides — caller skips those locked dims
+    so the protagonist's value (already in the cast prepend) wins. The third
+    tier (narrative_direction.character_seed) is moot in derive: character_seed
+    is chat-guidance only and never enters the prompt (DR-6).
+    """
+    if not plan.cast or "protagonist" not in (item.cast_in_panel or []):
+        return set()
+    prot = plan.cast.get("protagonist")
+    if prot is None:
+        return set()
+    return set(prot.visual.keys()) & set(_LAYER_A_DIMENSION_NAMES)
+
+
+def _beat_templates(plan: Plan, item: Item) -> tuple[str | None, str | None]:
+    """BC-G6-2/3/4: resolve (beat_prefix, beat_suffix) for storyboard mode.
+
+    Gated by use_template (BC-G6-3). beat_prefix/suffix only ever resolve from
+    the panel_type layer (None when item.panel_type absent or not in taxonomy).
+    Album mode never calls this (BC-G6-4). Goes through the shared dispatch
+    helper (DR-4) — no raw panel_taxonomy access here.
+    """
+    if not item.use_template or not item.panel_type:
+        return None, None
+    prefix, _ = _resolve_per_item_config(plan, item, "beat_prefix")
+    suffix, _ = _resolve_per_item_config(plan, item, "beat_suffix")
+    return prefix, suffix
 
 
 def _validate_postcondition(result: str, item: Item) -> None:

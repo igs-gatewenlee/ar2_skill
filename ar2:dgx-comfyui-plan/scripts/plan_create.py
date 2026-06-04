@@ -95,18 +95,24 @@ def create_plan(plans_dir: Path, *, preload: ps.Plan | None = None) -> str:
             # style_prefix_zh, style_suffix_zh, style_negative_zh
         )
     else:
-        plan = ps.Plan(
-            id=plan_id,
-            title=r1.title,
-            version=1,
-            created=now,
-            updated=now,
-            status="ready",
-            workflow=workflow,
-            size=size,
-            steps=steps,
-            batch_per_item=batch,
-            seed_strategy=seed_strategy,
+        # BC-G9-2 (#009 prevention): fresh-create unified to the replace pattern
+        # (matching the preload branch). Construct a minimal Plan with required
+        # fields only, then replace the optionals — future optional fields then
+        # auto-inherit their dataclass default instead of being silently dropped.
+        plan = replace(
+            ps.Plan(
+                id=plan_id,
+                title=r1.title,
+                version=1,
+                created=now,
+                updated=now,
+                status="ready",
+                workflow=workflow,
+                size=size,
+                steps=steps,
+                batch_per_item=batch,
+                seed_strategy=seed_strategy,
+            ),
             lora=lora,
             face_ref=None,
             story_vision="(empty)",
@@ -209,7 +215,8 @@ def _read_items_lines() -> list[ps.Item]:
             _err(f"  expected `<slug> <prompt>`, got `{line}`. skipped.")
             continue
         slug, prompt = parts[0], parts[1]
-        items.append(ps.Item(slug=slug, prompt=prompt, full=False))
+        # BC-G9 (#009): minimal Item + replace → v1.3/future optional fields inherit.
+        items.append(replace(ps.Item(slug=slug, prompt=prompt), full=False))
         idx += 1
     if not items:
         _err("at least 1 item required")
@@ -226,7 +233,8 @@ def _read_items_blocks() -> list[ps.Item]:
         if prompt == "---" or not prompt:
             break
         slug = _prompt(f"  slug for item {idx}: ").strip() or f"item_{idx}"
-        items.append(ps.Item(slug=slug, prompt=prompt, full=False))
+        # BC-G9 (#009): minimal Item + replace → v1.3/future optional fields inherit.
+        items.append(replace(ps.Item(slug=slug, prompt=prompt), full=False))
         idx += 1
     if not items:
         _err("at least 1 item required")

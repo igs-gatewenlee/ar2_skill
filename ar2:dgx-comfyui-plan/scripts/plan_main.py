@@ -27,6 +27,7 @@ from pathlib import Path
 import plan_from_preset
 import plan_promote
 import plan_show
+import plan_validate
 
 
 def _plans_dir() -> Path:
@@ -60,6 +61,9 @@ def parse_args() -> argparse.Namespace:
                    help="List presets, or cat one preset detail")
     g.add_argument("--promote", metavar="WORKING_ID",
                    help="Promote working plan → preset")
+    g.add_argument("--validate", metavar="PLAN_ID",
+                   help="Lint plan (event density / dispatch / cast warnings, "
+                        "non-blocking, BC-G5-4)")
     p.add_argument("--tags", default="",
                    help="Comma-separated tags (with --promote)")
     p.add_argument("--desc", default=None,
@@ -83,6 +87,9 @@ def main() -> int:
     if args.show is not None:
         preset_id = None if args.show == _SHOW_LIST_SENTINEL else args.show
         return plan_show.show_presets(_presets_dir(), preset_id)
+
+    if args.validate is not None:
+        return plan_validate.validate(_plans_dir(), args.validate)
 
     if args.promote is not None:
         tags = [t.strip() for t in args.tags.split(",") if t.strip()] or None

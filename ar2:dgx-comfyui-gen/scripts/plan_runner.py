@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import HOST, INPUT_DIR, OUTPUT_DIR, LOCAL_OUTPUT_DIR_NAME  # noqa: E402
 from ssh_client import ensure_tunnel, ssh_exec, scp_get, scp_put  # noqa: E402
 import comfyui_api as api  # noqa: E402
-from workflow_params import inject, WorkflowParamError  # noqa: E402
+from workflow_params import inject, has_pulid_node, WorkflowParamError  # noqa: E402
 import plan_loader  # noqa: E402
 
 # ── 透明素材（Route A/B）跨 skill 資源定位 + per-route dispatch（T3 / M-1）──
@@ -275,17 +275,32 @@ def _submit_all(
     templates: dict,
     loaded: plan_loader.LoadedPlan,
     run_dir_name: str,
-    face_ref_filename: str | None,
+    plan_face_ref: str | None,
 ) -> list[dict]:
-    """Submit each item; tolerate per-item failure (EH-7). Per-route template dispatch（T3）。"""
+    """Submit each item; tolerate per-item failure (EH-7). Per-route template
+    dispatch（T3）+ Plan Y v1.3 per-item workflow / PuLID dispatch（Gap 1/2）。
+
+    plan_face_ref: basename of the plan-level face_ref pre-uploaded once (v1.2
+    behavior preserved). Per-item workflow_override templates (BC-G1-3) and v13
+    override face_refs (BC-G2-7) are cached lazily below.
+    """
     submissions: list[dict] = []
+    wf_template_cache: dict[str, dict] = {}   # BC-G1-3: workflow_override → template
+    face_ref_cache: dict[str, str | None] = {}  # v13 override face_ref → basename
     for item in loaded.items:
         tag = f"  [{item.index:02d}] {item.slug}"
         route = getattr(item, "route", "none")
         try:
             if route == "none":
+                template = _select_none_template(item, templates, wf_template_cache)
+                # BC-G2-6 / EH-G1-2: verify effective workflow ↔ pulid_enabled
+                # AFTER template load ∧ BEFORE inject (v13 dispatch only).
+                _check_pulid_alignment(template, item)
+                face_ref_filename = _resolve_face_ref(
+                    item, loaded, run_dir_name, plan_face_ref, face_ref_cache
+                )
                 patched = inject(
-                    templates["none"],
+                    template,
                     prompt=item.final_prompt,
                     negative_prompt=(loaded.negative or None),
                     seed=item.seed,
@@ -293,8 +308,11 @@ def _submit_all(
                     batch_size=1,
                     width=loaded.size[0],
                     height=loaded.size[1],
+                    # BC-G2-7 caller mapping: take per-item effective values from
+                    # ResolvedItem (dispatch strength → runtime weight); NOT
+                    # LoadedPlan-level. inject(None) → skip (v1.2 :167/:177).
                     face_ref_filename=face_ref_filename,
-                    pulid_weight=loaded.pulid_weight,
+                    pulid_weight=item.pulid_strength,
                     output_subdir=run_dir_name,
                     filename_prefix_override=item.filename_prefix,
                 )
@@ -321,6 +339,71 @@ def _submit_all(
             {"item": item, "prompt_id": prompt_id, "queue": queue_n}
         )
     return submissions
+
+
+def _select_none_template(item, templates: dict, cache: dict) -> dict:
+    """BC-G1-3: effective workflow template for a route=='none' item.
+
+    workflow_override → load + cache that workflow (EH-G1-1: missing file →
+    WorkflowParamError so the item fails without aborting the batch). No
+    override → plan-level template (templates['none'])."""
+    name = getattr(item, "workflow_override", None)
+    if not name:
+        return templates["none"]
+    if name not in cache:
+        try:
+            path = _resolve_workflow(name)
+        except FileNotFoundError as e:  # EH-G1-1
+            raise WorkflowParamError(
+                f"workflow_override {name!r} not found for item {item.slug!r}: {e}"
+            ) from e
+        cache[name] = plan_loader.strip_workflow_metadata(json.loads(path.read_text()))
+    return cache[name]
+
+
+def _check_pulid_alignment(template: dict, item) -> None:
+    """BC-G2-6 / EH-G1-2 (v13 dispatch only): effective workflow ↔ pulid_enabled.
+
+    Legacy items (pulid_dispatch != 'v13') keep exact v1.2 behavior — no gate
+    (BC-G0 reconciliation; see plan_loader._resolve_dispatch)."""
+    if getattr(item, "pulid_dispatch", "legacy") != "v13":
+        return
+    has_node = has_pulid_node(template)
+    wf = item.workflow_override or "(plan workflow)"
+    if item.pulid_enabled and not has_node:
+        raise WorkflowParamError(
+            f"pulid_enabled=true but workflow {wf} has no ApplyPulidFlux node; "
+            f"either override workflow to a PuLID-enabled one or set "
+            f"pulid.enabled=false"
+        )
+    if not item.pulid_enabled and has_node:
+        raise WorkflowParamError(
+            f"pulid_enabled=false but workflow {wf} contains ApplyPulidFlux "
+            f"node; either override workflow to a non-PuLID one (e.g. flux_basic) "
+            f"or set pulid.enabled=true"
+        )
+
+
+def _resolve_face_ref(item, loaded, run_dir_name: str, plan_face_ref: str | None,
+                      cache: dict) -> str | None:
+    """Per-item face_ref basename for inject (BC-G2-7 caller mapping).
+
+    Reuses the plan-level pre-uploaded basename when the item's resolved
+    face_ref equals plan.face_ref (legacy + v13-using-plan-default → byte-equiv
+    v1.2). Uploads + caches a distinct v13 override face_ref otherwise."""
+    frf_local = getattr(item, "pulid_face_ref", None)
+    if frf_local is None:
+        return None
+    if frf_local == loaded.face_ref:
+        return plan_face_ref
+    if frf_local not in cache:
+        try:
+            cache[frf_local] = _upload_face_ref(frf_local, run_dir_name)
+        except FileNotFoundError as e:
+            raise WorkflowParamError(
+                f"face_ref {frf_local!r} not found for item {item.slug!r}: {e}"
+            ) from e
+    return cache[frf_local]
 
 
 def _process_prompt(

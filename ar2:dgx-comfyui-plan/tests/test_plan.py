@@ -14,6 +14,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from dataclasses import replace  # BC-G9-4: #009-safe fixture construction
 from pathlib import Path
 
 # Add scripts/ to path
@@ -761,24 +762,17 @@ visual_lock: {}
             **{n: ps.Dimension(None, "unspecified")
                for n in ps._LAYER_A_DIMENSION_NAMES}
         )
-        plan_none = ps.Plan(
+        # BC-G9-4 (#009): one base Plan/Item + replace → v1.3/future fields inherit.
+        _base = ps.Plan(
             id="t", title="t", version=1,
             created=ps.now_iso(), updated=ps.now_iso(),
             status="ready", workflow="flux_basic",
             size=[512, 512], steps=20, batch_per_item=1,
             seed_strategy={"type": "fixed", "base": 0, "step": 0},
             items=[ps.Item("a", "p")],
-            layer_a=None,
         )
-        plan_unspec = ps.Plan(
-            id="t", title="t", version=1,
-            created=ps.now_iso(), updated=ps.now_iso(),
-            status="ready", workflow="flux_basic",
-            size=[512, 512], steps=20, batch_per_item=1,
-            seed_strategy={"type": "fixed", "base": 0, "step": 0},
-            items=[ps.Item("a", "p")],
-            layer_a=empty_a,
-        )
+        plan_none = replace(_base, layer_a=None)
+        plan_unspec = replace(_base, layer_a=empty_a)
         s_none = ps.serialize(plan_none)
         s_unspec = ps.serialize(plan_unspec)
         # Both omit Design Dimensions section.

@@ -74,6 +74,10 @@ _DD_KEY_LAYER_C = "narrative_direction"
 _DD_KEY_LAYER_A = "visual_lock"
 # Plan Y v1.2 — per_item beat (Layer D) YAML key inside Design Dimensions.
 _DD_KEY_PER_ITEM_BEATS = "per_item_beats"
+# Plan Y v1.3 — panel_taxonomy + cast YAML keys inside Design Dimensions
+# (BC-G3-5 / BC-G4-5、與既有 DD key 並列).
+_DD_KEY_PANEL_TAXONOMY = "panel_taxonomy"
+_DD_KEY_CAST = "cast"
 
 # BC-S0 (Plan Y v1.2): Module-level enum SSoT — all literal usages MUST
 # reference these (#009 prevention落地).
@@ -91,7 +95,32 @@ SIZE_ASPECT_TO_SIZE: dict[str, tuple[int, int]] = {
 # Plan dataclass / frontmatter 契約版本。跨 skill 消費者（gen/plan_loader）import 後
 # assert 此值 >= 其 REQUIRED，防 version drift 時 sibling-import 撿到舊版 module 而 silent
 # 漏欄（M-2）。新增/移除影響 Plan 序列化的欄位時 bump。
-SCHEMA_VERSION = "1.3.0"  # 1.3.0: 新增 transparent_assets（透明素材 route/asset_type block）
+SCHEMA_VERSION = "1.4.0"  # 1.4.0: Plan Y v1.3（panel_taxonomy / cast / plan_quality + 7 Item 新欄位）
+# 1.3.0: 新增 transparent_assets（透明素材 route/asset_type block）
+
+# ─── Plan Y v1.3 — module-level SSoT constants（#009 prevention 延續 BC-S0 精神）───
+# BC-G5-1: narrative event_type enum（per_item_beats entry 可選欄位）。
+EVENT_TYPE_ENUM = ("action", "dialogue", "discovery", "transition", "mood")
+# BC-G4-1: cast entry type enum（default human）。
+CAST_TYPE_ENUM = ("human", "creature", "object")
+# BC-G3-2 (DR-R3-5): panel_type / panel_taxonomy key 規範 — 採 validate_id docstring
+# 規範（首字符限 [a-z]、收緊），**不複用 _ID_PATTERN**（後者允許數字開頭）。
+_PANEL_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+# BC-G3-2: panel_type reserved keys（禁用作自訂名）。
+_PANEL_TYPE_RESERVED = frozenset({"default", "__fallback__"})
+# EH-G3-2: panel_taxonomy entry 允許的 key 白名單。
+_PANEL_TAXONOMY_ALLOWED_KEYS = frozenset({"workflow", "pulid", "beat_prefix", "beat_suffix"})
+# BC-G2-1: pulid override（item / panel_taxonomy）允許的 key。
+_PULID_OVERRIDE_ALLOWED_KEYS = frozenset({"enabled", "strength", "face_ref"})
+# EH-G4-4 (DR-R2-5, evidence_level: empirical, tunable): cast visual 字符 budget。
+# 來源：reviewer round 2 推算（IF-G2 上限 2000 - locked/beat/per_group 平均 ≈ 1500
+# cast budget）、非 ground-truthed。實戰過嚴/過鬆改此常數即可（無 schema 變更）。
+_CAST_VISUAL_BUDGET_SINGLE = 500      # 單一 cast.X.visual.Y string 上限
+_CAST_VISUAL_BUDGET_PER_ENTRY = 800   # 單一 cast entry 全部 visual keys 加總上限
+_CAST_VISUAL_BUDGET_PER_PLAN = 1500   # 整 plan cast prepend 累加上限（derive 端用）
+# BC-G5-3 (DR-8): plan_quality.event_density_warning 預設與範圍。
+_EVENT_DENSITY_WARNING_DEFAULT = 0.7
+_CAST_IN_PANEL_WARNING_DEFAULT = True
 
 
 @dataclass
@@ -136,6 +165,29 @@ class LayerC:
 
 
 @dataclass
+class PanelTypeConfig:
+    """Plan Y v1.3 — panel_taxonomy entry (BC-G3-1).
+
+    User-defined panel type → dispatch config (workflow / pulid / beat
+    templates). All fields optional; absent → that dimension falls through to
+    plan-level default (BC-G3-4 Layer 2).
+    """
+    workflow: str | None = None
+    pulid: dict | None = None  # {enabled: bool, strength: float, face_ref: str}
+    beat_prefix: str | None = None  # BC-G6-1 (storyboard only)
+    beat_suffix: str | None = None
+
+
+@dataclass
+class CastEntry:
+    """Plan Y v1.3 — multi-character cast entry (BC-G4-1)."""
+    name: str
+    type: str = "human"  # CAST_TYPE_ENUM: human | creature | object
+    # free-key visual dict, 慣例 hair / outfit / build / accessory / color / size / features
+    visual: dict = field(default_factory=dict)
+
+
+@dataclass
 class Item:
     """One row of the items table (+ optional Layer D per-item beat)."""
     slug: str
@@ -145,6 +197,14 @@ class Item:
     # Design Dimensions per_item_beats block, not in Items table.
     beat_description: str | None = None
     beat_description_zh: str | None = None
+    # ─── Plan Y v1.3 新增（皆 optional、缺值 → fallback、BC-G0-2）───
+    panel_type: str | None = None              # BC-G3-3 (dispatch 入口)
+    workflow_override: str | None = None       # BC-G1-1
+    pulid_override: dict | None = None         # BC-G2-1 {enabled, strength, face_ref}
+    cast_in_panel: list[str] = field(default_factory=list)  # BC-G4-2
+    event_type: str | None = None              # BC-G5-1
+    event_description: str | None = None       # BC-G5-2
+    use_template: bool = True                  # BC-G6-3 (beat template opt-out)
 
 
 @dataclass
@@ -194,6 +254,10 @@ class Plan:
     # 透明素材（Route A/B）per-asset 設定，opaque schema dict（{defaults, items}）。
     # None=非透明 plan（現役行為零變化）。plan_loader 按 slug 映射到 ResolvedItem.route/asset_type。
     transparent_assets: dict | None = None
+    # ─── Plan Y v1.3 新增（皆 optional、None 表示無、BC-G0-2/3）───
+    panel_taxonomy: dict[str, PanelTypeConfig] | None = None  # BC-G3-1 (Design Dimensions key)
+    cast: dict[str, CastEntry] | None = None                 # BC-G4-1 (Design Dimensions key)
+    plan_quality: dict | None = None  # BC-G5-3 frontmatter {event_density_warning, cast_in_panel_warning}
 
 
 _ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
@@ -380,11 +444,11 @@ def _build_plan(fm: dict, sections: dict[str, str], path: Path) -> Plan:
     # Design Dimensions section is optional (BC-1).
     dimensions_text = sections.get(_DESIGN_DIMENSIONS_HEADER)
     if dimensions_text and dimensions_text.strip():
-        layer_b, layer_c, layer_a = _parse_design_dimensions(
+        layer_b, layer_c, layer_a, panel_taxonomy, cast = _parse_design_dimensions(
             dimensions_text, items, path
         )
     else:
-        layer_b, layer_c, layer_a = (None, None, None)
+        layer_b, layer_c, layer_a, panel_taxonomy, cast = (None, None, None, None, None)
     # BC-S1/S2/S3 (Plan Y v1.2): parse mode + size_aspect + character_consistency.
     mode = _parse_enum(fm.get("mode"), MODE_ENUM, "mode", path)
     size_aspect = _parse_enum(
@@ -447,6 +511,9 @@ def _build_plan(fm: dict, sections: dict[str, str], path: Path) -> Plan:
         size_aspect=size_aspect,
         character_consistency=character_consistency,
         transparent_assets=fm.get("transparent_assets"),
+        panel_taxonomy=panel_taxonomy,
+        cast=cast,
+        plan_quality=_parse_plan_quality(fm.get("plan_quality"), path),
     )
 
 
@@ -583,6 +650,7 @@ def _plan_to_frontmatter(plan: Plan) -> dict[str, Any]:
         "provenance": plan.provenance,
         "promoted": plan.promoted,
         "transparent_assets": plan.transparent_assets,  # M-3: round-trip（None 時略過）
+        "plan_quality": plan.plan_quality,  # BC-G5-3 (None 時略過、保 v1.2 round-trip)
     }
     for key, value in optional.items():
         if value is not None:
@@ -644,12 +712,18 @@ def _plan_to_body(plan: Plan) -> str:
 
 def _parse_design_dimensions(
     text: str, items: list[Item], path: Path
-) -> tuple[LayerB | None, LayerC | None, LayerA | None]:
-    """Parse `# Design Dimensions` section → (LayerB, LayerC, LayerA).
+) -> tuple[
+    LayerB | None, LayerC | None, LayerA | None,
+    dict[str, PanelTypeConfig] | None, dict[str, CastEntry] | None,
+]:
+    """Parse `# Design Dimensions` → (LayerB, LayerC, LayerA, panel_taxonomy, cast).
 
-    Also applies per_item_beats (Plan Y v1.2 Layer D, BC-D2/D5) to `items`
-    in place. Accepts bare YAML or ```yaml fence. Missing layer key → None.
-    Missing Layer A dim → default Dimension(None, "unspecified") (BC-4).
+    Also applies per_item_beats (Plan Y v1.2 Layer D, BC-D2/D5 + v1.3 per-item
+    fields) to `items` in place. Accepts bare YAML or ```yaml fence. Missing
+    layer key → None. Missing Layer A dim → default Dimension(None, "unspecified").
+
+    Plan Y v1.3: panel_taxonomy / cast parsed BEFORE per_item_beats so the
+    latter can validate cast_in_panel references (EH-G4-1).
     """
     yaml_text = _strip_yaml_fence(text)
     try:
@@ -666,16 +740,26 @@ def _parse_design_dimensions(
     layer_b = _layer_b_from_dict(data.get(_DD_KEY_LAYER_B), path)
     layer_c = _layer_c_from_dict(data.get(_DD_KEY_LAYER_C), path)
     layer_a = _layer_a_from_dict(data.get(_DD_KEY_LAYER_A), path)
-    # BC-D2 (Plan Y v1.2): apply per_item_beats to items.
-    _apply_per_item_beats(data.get(_DD_KEY_PER_ITEM_BEATS), items, path)
-    return layer_b, layer_c, layer_a
+    # Plan Y v1.3: panel_taxonomy (BC-G3-5) + cast (BC-G4-5).
+    panel_taxonomy = _panel_taxonomy_from_dict(data.get(_DD_KEY_PANEL_TAXONOMY), path)
+    cast = _cast_from_dict(data.get(_DD_KEY_CAST), path)
+    # BC-D2 (Plan Y v1.2) + Plan Y v1.3 per-item fields: apply per_item_beats.
+    _apply_per_item_beats(data.get(_DD_KEY_PER_ITEM_BEATS), items, cast, path)
+    return layer_b, layer_c, layer_a, panel_taxonomy, cast
 
 
-def _apply_per_item_beats(data: Any, items: list[Item], path: Path) -> None:
-    """BC-D2/D5 + EH-D1/D2 (Plan Y v1.2): Apply per_item_beats to items in place.
+def _apply_per_item_beats(
+    data: Any, items: list[Item],
+    cast: dict[str, CastEntry] | None, path: Path,
+) -> None:
+    """BC-D2/D5 + EH-D1/D2 (Plan Y v1.2) + Plan Y v1.3 per-item fields.
 
     None → no-op (BC-D4 legacy compat). Unknown slug → EH-D1. Non-mapping
-    entry → EH-D2. Item without entry → beat_description stays None (BC-D5).
+    entry → EH-D2. Item without entry → all v1.3 fields stay default (BC-G0-2).
+
+    Plan Y v1.3 entry keys (all optional, additive on existing shape):
+    panel_type / workflow / pulid / cast_in_panel / event_type /
+    event_description / use_template.
     """
     if data is None:
         return
@@ -704,18 +788,505 @@ def _apply_per_item_beats(data: Any, items: list[Item], path: Path) -> None:
                     f"must be string, got {type(desc_zh).__name__}"
                 )
             item.beat_description_zh = desc_zh
+        _apply_v13_item_fields(item, entry, slug, cast, path)
 
 
-def _per_item_beats_to_dict(items: list[Item]) -> dict[str, dict[str, str]] | None:
-    """BC-D3 (Plan Y v1.2): Build per_item_beats YAML block; None if all empty."""
-    out: dict[str, dict[str, str]] = {}
+def _apply_v13_item_fields(
+    item: Item, entry: dict, slug: str,
+    cast: dict[str, CastEntry] | None, path: Path,
+) -> None:
+    """Plan Y v1.3: parse + validate per-item dispatch / event / cast fields.
+
+    Mutates `item` in place. All keys optional; absent → field stays default.
+    """
+    # BC-G3-3: panel_type (regex-validated, EXISTENCE vs taxonomy is a
+    # dispatch-time warning EH-G3-1, NOT a parse error).
+    panel_type = entry.get("panel_type")
+    if panel_type is not None:
+        item.panel_type = _validate_panel_type(panel_type, f"{slug}.panel_type", path)
+    # BC-G1-1: workflow override.
+    workflow = entry.get("workflow")
+    if workflow is not None:
+        if not isinstance(workflow, str) or not workflow:
+            raise ValueError(
+                f"EH-3: {path}: per_item_beats[{slug!r}].workflow must be a "
+                f"non-empty string, got {workflow!r}"
+            )
+        item.workflow_override = workflow
+    # BC-G2-1: pulid override {enabled, strength, face_ref} (partial-override OK).
+    pulid = entry.get("pulid")
+    if pulid is not None:
+        item.pulid_override = _validate_pulid_override(
+            pulid, f"per_item_beats[{slug!r}].pulid", path
+        )
+    # BC-G4-2: cast_in_panel list[str] → validate refs against cast (EH-G4-1).
+    cast_in_panel = entry.get("cast_in_panel")
+    if cast_in_panel is not None:
+        item.cast_in_panel = _validate_cast_in_panel(cast_in_panel, slug, cast, path)
+    # BC-G5-1/2 + EH-G5-1/2/3: event_type / event_description.
+    _apply_event_fields(item, entry, slug, path)
+    # BC-G6-3: use_template (default True).
+    use_template = entry.get("use_template")
+    if use_template is not None:
+        if not isinstance(use_template, bool):
+            raise ValueError(
+                f"EH-3: {path}: per_item_beats[{slug!r}].use_template must be "
+                f"bool, got {type(use_template).__name__}"
+            )
+        item.use_template = use_template
+
+
+def _apply_event_fields(item: Item, entry: dict, slug: str, path: Path) -> None:
+    """BC-G5-1/2 + EH-G5-1/2/3: parse + validate event_type / event_description.
+
+    Both互相 optional (BC-G5-5): both absent → no-op; one present → other
+    required (EH-G5-2). event_type enum-checked (EH-G5-1); description ≥ 10
+    chars (EH-G5-3).
+    """
+    event_type = entry.get("event_type")
+    event_description = entry.get("event_description")
+    if event_type is None and event_description is None:
+        return
+    if event_type is None or event_description is None:
+        raise ValueError(
+            f"EH-G5-2: {path}: item {slug!r} event_type 與 event_description "
+            f"必須同時存在或同時缺（got event_type={event_type!r}, "
+            f"event_description={event_description!r}）"
+        )
+    if event_type not in EVENT_TYPE_ENUM:
+        raise ValueError(
+            f"EH-G5-1: {path}: item {slug!r} event_type 必為 {EVENT_TYPE_ENUM}，"
+            f"got {event_type!r}"
+        )
+    if not isinstance(event_description, str):
+        raise ValueError(
+            f"EH-G5-2: {path}: item {slug!r} event_description must be string, "
+            f"got {type(event_description).__name__}"
+        )
+    if len(event_description) < 10:
+        raise ValueError(
+            f"EH-G5-3: {path}: item {slug!r} event_description 至少 10 字元"
+            f"（got {len(event_description)}）"
+        )
+    item.event_type = event_type
+    item.event_description = event_description
+
+
+# ---------- Plan Y v1.3: shared input-side validators ----------
+
+
+def _has_unescaped_pipe(s: str) -> bool:
+    """True if `s` contains a `|` not preceded by `\\`.
+
+    Local copy (parse-side input validation); prompt_derive has the derive-side
+    twin. plan_schema cannot import prompt_derive (would be circular — derive
+    imports schema). Both enforce the same IF-G2 / BC-18 boundary.
+    """
+    i = 0
+    while i < len(s):
+        if s[i] == "\\" and i + 1 < len(s) and s[i + 1] == "|":
+            i += 2
+            continue
+        if s[i] == "|":
+            return True
+        i += 1
+    return False
+
+
+def _validate_derive_fragment(value: Any, ctx: str, path: Path, max_len: int) -> str:
+    """BC-G4-6 + BC-G6 補充 (IF-G2 前置條件 propagate): a string destined to be
+    prepended/appended into a derived prompt must already satisfy the callee
+    post-condition (no newline / no unescaped `|` / within budget). Names the
+    offending `ctx` so the user can locate it (not a generic 'derive failed').
+    """
+    if not isinstance(value, str):
+        raise ValueError(f"EH: {path}: {ctx} must be a string, got {type(value).__name__}")
+    if "\n" in value:
+        raise ValueError(f"EH: {path}: {ctx} 含換行（newline 禁止）")
+    if _has_unescaped_pipe(value):
+        raise ValueError(f"EH: {path}: {ctx} 含未跳脫的 `|`（需 `\\|`）")
+    if len(value) > max_len:
+        raise ValueError(f"EH: {path}: {ctx} 過長（{len(value)} chars > {max_len}）")
+    return value
+
+
+def _validate_panel_type(value: Any, ctx: str, path: Path) -> str:
+    """BC-G3-2 (DR-R3-5): panel_type / panel_taxonomy key regex + reserved guard."""
+    if not isinstance(value, str):
+        raise ValueError(f"EH: {path}: {ctx} must be a string, got {type(value).__name__}")
+    if value in _PANEL_TYPE_RESERVED:
+        raise ValueError(
+            f"EH: {path}: {ctx}={value!r} 為保留字，不可作 panel_type 名稱"
+            f"（reserved: {sorted(_PANEL_TYPE_RESERVED)}）"
+        )
+    if not _PANEL_TYPE_PATTERN.match(value):
+        raise ValueError(
+            f"EH: {path}: {ctx}={value!r} 不合法，必須匹配 "
+            f"^[a-z][a-z0-9_]{{0,63}}$（首字符限 [a-z]、≤ 64 chars）"
+        )
+    return value
+
+
+def _validate_pulid_override(value: Any, ctx: str, path: Path) -> dict:
+    """BC-G2-1/5: pulid override dict {enabled?, strength?, face_ref?} (partial OK).
+
+    Returns a normalized dict containing only the provided keys. Unknown keys →
+    ValueError. strength reuses v1.2 _parse_pulid_weight bounds [0.0, 3.0].
+    """
+    value = _require_mapping(value, ctx, path)
+    unknown = set(value.keys()) - _PULID_OVERRIDE_ALLOWED_KEYS
+    if unknown:
+        raise ValueError(
+            f"EH: {path}: {ctx} unknown key(s) {sorted(unknown)}; "
+            f"allowed: {sorted(_PULID_OVERRIDE_ALLOWED_KEYS)}"
+        )
+    out: dict[str, Any] = {}
+    if "enabled" in value:
+        enabled = value["enabled"]
+        if not isinstance(enabled, bool):
+            raise ValueError(
+                f"EH: {path}: {ctx}.enabled must be bool, got {type(enabled).__name__}"
+            )
+        out["enabled"] = enabled
+    if "strength" in value:
+        # BC-G2-5: reuse v1.2 pulid_weight bounds (raises on non-numeric / OOR).
+        out["strength"] = _parse_pulid_weight(value["strength"])
+    if "face_ref" in value:
+        face_ref = value["face_ref"]
+        if not isinstance(face_ref, str) or not face_ref:
+            raise ValueError(
+                f"EH: {path}: {ctx}.face_ref must be a non-empty string, got {face_ref!r}"
+            )
+        out["face_ref"] = face_ref
+    return out
+
+
+def _validate_cast_in_panel(
+    value: Any, slug: str, cast: dict[str, CastEntry] | None, path: Path,
+) -> list[str]:
+    """BC-G4-2 + EH-G4-1: cast_in_panel list[str]; every ref must be a defined
+    cast key (caught at plan-stage parse, not surfacing only at derive)."""
+    if not isinstance(value, list):
+        raise ValueError(
+            f"EH: {path}: per_item_beats[{slug!r}].cast_in_panel must be a list, "
+            f"got {type(value).__name__}"
+        )
+    refs: list[str] = []
+    known = set(cast.keys()) if cast else set()
+    for ref in value:
+        if not isinstance(ref, str) or not ref:
+            raise ValueError(
+                f"EH: {path}: item {slug!r} cast_in_panel entry must be a "
+                f"non-empty string, got {ref!r}"
+            )
+        if ref not in known:
+            raise ValueError(
+                f"EH-G4-1: {path}: unknown character {ref!r} in cast_in_panel "
+                f"of item {slug!r}; defined cast: {sorted(known)}"
+            )
+        refs.append(ref)
+    return refs
+
+
+# ---------- Plan Y v1.3: panel_taxonomy / cast / plan_quality parsers ----------
+
+
+def _panel_taxonomy_from_dict(
+    data: Any, path: Path,
+) -> dict[str, PanelTypeConfig] | None:
+    """BC-G3-1/2/5 + EH-G3-2: parse panel_taxonomy mapping → {name: PanelTypeConfig}."""
+    if data is None:
+        return None
+    data = _require_mapping(data, _DD_KEY_PANEL_TAXONOMY, path)
+    out: dict[str, PanelTypeConfig] = {}
+    for name, cfg in data.items():
+        _validate_panel_type(name, f"panel_taxonomy key {name!r}", path)
+        cfg = _require_mapping(cfg, f"panel_taxonomy[{name!r}]", path)
+        unknown = set(cfg.keys()) - _PANEL_TAXONOMY_ALLOWED_KEYS
+        if unknown:
+            raise ValueError(
+                f"EH-G3-2: {path}: unknown key in panel_taxonomy[{name!r}]: "
+                f"{sorted(unknown)}; allowed: {sorted(_PANEL_TAXONOMY_ALLOWED_KEYS)}"
+            )
+        workflow = cfg.get("workflow")
+        if workflow is not None and (not isinstance(workflow, str) or not workflow):
+            raise ValueError(
+                f"EH-G3-2: {path}: panel_taxonomy[{name!r}].workflow must be a "
+                f"non-empty string, got {workflow!r}"
+            )
+        pulid = cfg.get("pulid")
+        if pulid is not None:
+            pulid = _validate_pulid_override(
+                pulid, f"panel_taxonomy[{name!r}].pulid", path
+            )
+        beat_prefix = cfg.get("beat_prefix")
+        if beat_prefix is not None:
+            beat_prefix = _validate_derive_fragment(
+                beat_prefix, f"panel_taxonomy[{name!r}].beat_prefix", path,
+                _CAST_VISUAL_BUDGET_SINGLE,
+            )
+        beat_suffix = cfg.get("beat_suffix")
+        if beat_suffix is not None:
+            beat_suffix = _validate_derive_fragment(
+                beat_suffix, f"panel_taxonomy[{name!r}].beat_suffix", path,
+                _CAST_VISUAL_BUDGET_SINGLE,
+            )
+        out[name] = PanelTypeConfig(
+            workflow=workflow, pulid=pulid,
+            beat_prefix=beat_prefix, beat_suffix=beat_suffix,
+        )
+    return out
+
+
+def _cast_from_dict(data: Any, path: Path) -> dict[str, CastEntry] | None:
+    """BC-G4-1/5/6 + EH-G4-4: parse cast mapping → {character_id: CastEntry}.
+
+    Input-side budget validation (BC-G4-6 single ≤ 500 chars + EH-G4-4 per-entry
+    ≤ 800 chars), naming the offending entry/key. Per-plan ≤ 1500 budget is
+    enforced derive-side (cumulative prepend).
+    """
+    if data is None:
+        return None
+    data = _require_mapping(data, _DD_KEY_CAST, path)
+    out: dict[str, CastEntry] = {}
+    for char_id, entry in data.items():
+        if not isinstance(char_id, str) or not char_id:
+            raise ValueError(
+                f"EH: {path}: cast key must be a non-empty string, got {char_id!r}"
+            )
+        entry = _require_mapping(entry, f"cast[{char_id!r}]", path)
+        name = entry.get("name")
+        if name is None or not isinstance(name, str) or not name:
+            raise ValueError(
+                f"EH: {path}: cast[{char_id!r}].name is required and must be a "
+                f"non-empty string, got {name!r}"
+            )
+        ctype = entry.get("type", "human")
+        if ctype not in CAST_TYPE_ENUM:
+            raise ValueError(
+                f"EH: {path}: cast[{char_id!r}].type must be one of {CAST_TYPE_ENUM}, "
+                f"got {ctype!r}"
+            )
+        visual = entry.get("visual") or {}
+        visual = _require_mapping(visual, f"cast[{char_id!r}].visual", path)
+        norm_visual = _validate_cast_visual(visual, char_id, path)
+        out[char_id] = CastEntry(name=name, type=ctype, visual=norm_visual)
+    return out
+
+
+def _validate_cast_visual(visual: dict, char_id: str, path: Path) -> dict[str, str]:
+    """BC-G4-6 (single ≤ 500, no newline / unescaped `|`) + EH-G4-4 (per-entry
+    sum ≤ 800). Names the offending cast entry + visual key."""
+    out: dict[str, str] = {}
+    total = 0
+    for key, val in visual.items():
+        if not isinstance(key, str) or not key:
+            raise ValueError(
+                f"EH: {path}: cast[{char_id!r}].visual key must be a non-empty "
+                f"string, got {key!r}"
+            )
+        sval = _validate_derive_fragment(
+            val, f"cast[{char_id!r}].visual[{key!r}]", path,
+            _CAST_VISUAL_BUDGET_SINGLE,
+        )
+        total += len(sval)
+        out[key] = sval
+    if total > _CAST_VISUAL_BUDGET_PER_ENTRY:
+        raise ValueError(
+            f"EH-G4-4: {path}: cast {char_id!r} visual 描述過長（{total} chars > "
+            f"{_CAST_VISUAL_BUDGET_PER_ENTRY} budget）、derive 後可能超 2000 chars "
+            f"IF-G2 上限"
+        )
+    return out
+
+
+def _parse_plan_quality(value: Any, path: Path) -> dict | None:
+    """BC-G5-3 + EH-G5-4: plan_quality frontmatter {event_density_warning,
+    cast_in_panel_warning}. None → None. Defaults filled; density range [0,1]."""
+    if value is None:
+        return None
+    value = _require_mapping(value, "plan_quality", path)
+    unknown = set(value.keys()) - {"event_density_warning", "cast_in_panel_warning"}
+    if unknown:
+        raise ValueError(
+            f"EH: {path}: unknown key in plan_quality: {sorted(unknown)}; "
+            f"allowed: event_density_warning, cast_in_panel_warning"
+        )
+    density = value.get("event_density_warning", _EVENT_DENSITY_WARNING_DEFAULT)
+    try:
+        density = float(density)
+    except (TypeError, ValueError) as e:
+        raise ValueError(
+            f"EH-G5-4: {path}: event_density_warning must be numeric, got {density!r}"
+        ) from e
+    if not (0.0 <= density <= 1.0):
+        raise ValueError(
+            f"EH-G5-4: {path}: event_density_warning 必須在 0.0-1.0 範圍、got {density}"
+        )
+    cast_warning = value.get("cast_in_panel_warning", _CAST_IN_PANEL_WARNING_DEFAULT)
+    if not isinstance(cast_warning, bool):
+        raise ValueError(
+            f"EH: {path}: cast_in_panel_warning must be bool, "
+            f"got {type(cast_warning).__name__}"
+        )
+    return {
+        "event_density_warning": density,
+        "cast_in_panel_warning": cast_warning,
+    }
+
+
+# ---------- Plan Y v1.3: DR-4 shared dispatch helper (#009 / DRY SSoT) ----------
+
+# The ONLY place caller-side dispatch resolution may read raw item /
+# panel_taxonomy / plan-level fields. plan_loader (gen) + plan_main --validate
+# both go through these — no other caller accesses item.workflow_override /
+# panel_taxonomy[...].X directly (DR-4 P2 hard requirement; Phase 3 grep gate).
+
+_DISPATCH_DIMS = (
+    "workflow", "pulid.enabled", "pulid.strength", "pulid.face_ref",
+    "beat_prefix", "beat_suffix",
+)
+
+
+def _pulid_enabled_from_consistency(character_consistency: str) -> bool:
+    """BC-G2-3: derive pulid_enabled from plan.character_consistency.
+
+    CHARACTER_CONSISTENCY_ENUM = (prompt_only, pulid_face_ref, both).
+    pulid_face_ref / both → True; prompt_only → False.
+    """
+    return character_consistency in ("pulid_face_ref", "both")
+
+
+def _dispatch_candidates(plan: Plan, item: Item, dim_name: str) -> list[tuple[str, Any]]:
+    """Ordered (source_layer, value) candidates for `dim_name`, non-None only.
+
+    Layers in precedence order: item → panel_type → plan_level (BC-G3-4).
+    The single home for raw dispatch field access (DR-4). Callers must use
+    _resolve_per_item_config / _dispatch_double_written, never raw access.
+    """
+    if dim_name not in _DISPATCH_DIMS:
+        raise ValueError(f"_dispatch_candidates: unknown dim {dim_name!r}")
+    pt_cfg = None
+    if item.panel_type and plan.panel_taxonomy:
+        pt_cfg = plan.panel_taxonomy.get(item.panel_type)
+    cands: list[tuple[str, Any]] = []
+
+    if dim_name == "workflow":
+        if item.workflow_override is not None:
+            cands.append(("item", item.workflow_override))
+        if pt_cfg is not None and pt_cfg.workflow is not None:
+            cands.append(("panel_type", pt_cfg.workflow))
+        cands.append(("plan_level", plan.workflow))  # always present
+    elif dim_name.startswith("pulid."):
+        key = dim_name.split(".", 1)[1]  # enabled | strength | face_ref
+        if item.pulid_override is not None and key in item.pulid_override:
+            cands.append(("item", item.pulid_override[key]))
+        if pt_cfg is not None and pt_cfg.pulid is not None and key in pt_cfg.pulid:
+            cands.append(("panel_type", pt_cfg.pulid[key]))
+        if key == "enabled":
+            cands.append((
+                "plan_level",
+                _pulid_enabled_from_consistency(plan.character_consistency),
+            ))
+        elif key == "strength":
+            if plan.pulid_weight is not None:
+                cands.append(("plan_level", plan.pulid_weight))
+        elif key == "face_ref":
+            if plan.face_ref is not None:
+                cands.append(("plan_level", plan.face_ref))
+    elif dim_name in ("beat_prefix", "beat_suffix"):
+        if pt_cfg is not None:
+            val = getattr(pt_cfg, dim_name)
+            if val is not None:
+                cands.append(("panel_type", val))
+    return cands
+
+
+# Dimension defaults applied when no layer supplies a value (source="default").
+_DISPATCH_DEFAULTS: dict[str, Any] = {
+    "workflow": None, "pulid.enabled": False, "pulid.strength": 1.0,
+    "pulid.face_ref": None, "beat_prefix": None, "beat_suffix": None,
+}
+
+
+def _resolve_per_item_config(
+    plan: Plan, item: Item, dim_name: str,
+) -> tuple[Any, str]:
+    """DR-4 P2 hard requirement: single shared 3-layer dispatch resolver.
+
+    Returns (effective_value, source_layer) where source_layer ∈
+    {"item", "panel_type", "plan_level", "default"}. source_layer feeds
+    plan_main --validate C2 double-write detection without re-implementing the
+    fallback chain. Note: BC-G2-3 conditional gating (enabled=false → strength /
+    face_ref forced None) is applied by the CALLER, not here — this resolves one
+    dimension's raw 3-layer fallback in isolation.
+    """
+    cands = _dispatch_candidates(plan, item, dim_name)
+    if cands:
+        source_layer, value = cands[0]
+        return value, source_layer
+    return _DISPATCH_DEFAULTS[dim_name], "default"
+
+
+def _item_engages_v13_pulid_dispatch(plan: Plan, item: Item) -> bool:
+    """True iff the item OR its panel_type EXPLICITLY declares v1.3 pulid /
+    workflow dispatch intent (item.pulid_override / item.workflow_override, or a
+    panel_taxonomy entry supplying workflow / pulid).
+
+    BC-G0 reconciliation (Phase 2 implementer decision — ground-truthed):
+    when False, gen-side preserves EXACT v1.2 behavior (plan-level pulid_weight
+    + face_ref passed straight to inject, NO BC-G2-7 force-None, NO EH-G1-2
+    gate). Reason: legacy flux_pulid plans (e.g. preset cards_a11c) set face_ref
+    but leave character_consistency at its prompt_only default; deriving
+    pulid_enabled=false from that default + EH-G1-2 would reject the workflow
+    and break a working production plan — violating BC-G0-1 byte-equivalence.
+    The per-item PuLID toggle + EH-G1-2 gate (BC-G2-3/6/7) still apply in full
+    whenever the user opts in via an item/panel_type declaration.
+
+    Raw panel_taxonomy access stays here in the helper module (DR-4 SSoT)."""
+    if item.workflow_override is not None or item.pulid_override is not None:
+        return True
+    if item.panel_type and plan.panel_taxonomy:
+        pt = plan.panel_taxonomy.get(item.panel_type)
+        if pt is not None and (pt.workflow is not None or pt.pulid is not None):
+            return True
+    return False
+
+
+def _dispatch_double_written(plan: Plan, item: Item, dim_name: str) -> bool:
+    """BC-G5-4 C2: True iff both the item layer AND the panel_type layer supply
+    a value for `dim_name` (用 item 為準 per BC-G3-4 Layer 1). Built on the same
+    _dispatch_candidates SSoT — no separate判斷邏輯 (DR-R2-7)."""
+    layers = {layer for layer, _ in _dispatch_candidates(plan, item, dim_name)}
+    return "item" in layers and "panel_type" in layers
+
+
+def _per_item_beats_to_dict(items: list[Item]) -> dict[str, dict[str, Any]] | None:
+    """BC-D3 (Plan Y v1.2) + Plan Y v1.3 per-item fields: build per_item_beats
+    YAML block; None if all empty. BC-G0-5: v1.3 fields emitted only when
+    non-default (so v1.2 outlines round-trip byte-equivalent)."""
+    out: dict[str, dict[str, Any]] = {}
     for item in items:
-        entry = {
-            k: v for k, v in (
-                ("description", item.beat_description),
-                ("description_zh", item.beat_description_zh),
-            ) if v is not None
-        }
+        entry: dict[str, Any] = {}
+        if item.beat_description is not None:
+            entry["description"] = item.beat_description
+        if item.beat_description_zh is not None:
+            entry["description_zh"] = item.beat_description_zh
+        # Plan Y v1.3 (additive; only when non-default).
+        if item.panel_type is not None:
+            entry["panel_type"] = item.panel_type
+        if item.workflow_override is not None:
+            entry["workflow"] = item.workflow_override
+        if item.pulid_override:
+            entry["pulid"] = dict(item.pulid_override)
+        if item.cast_in_panel:
+            entry["cast_in_panel"] = list(item.cast_in_panel)
+        if item.event_type is not None:
+            entry["event_type"] = item.event_type
+        if item.event_description is not None:
+            entry["event_description"] = item.event_description
+        if item.use_template is not True:  # default True → omit
+            entry["use_template"] = item.use_template
         if entry:
             out[item.slug] = entry
     return out or None
@@ -841,7 +1412,10 @@ def _design_dimensions_to_body(plan: Plan) -> str:
     layer_b/c are None and layer_a is None or all dimensions unspecified.
     """
     per_item_beats = _per_item_beats_to_dict(plan.items)
-    if _all_layers_empty(plan) and per_item_beats is None:
+    if (
+        _all_layers_empty(plan) and per_item_beats is None
+        and plan.panel_taxonomy is None and plan.cast is None
+    ):
         return ""
     body: dict[str, Any] = {}
     if plan.layer_b is not None:
@@ -850,11 +1424,48 @@ def _design_dimensions_to_body(plan: Plan) -> str:
         body[_DD_KEY_LAYER_C] = _layer_c_to_dict(plan.layer_c)
     if plan.layer_a is not None and not layer_a_is_empty(plan.layer_a):
         body[_DD_KEY_LAYER_A] = _layer_a_to_dict(plan.layer_a)
+    # Plan Y v1.3: panel_taxonomy (BC-G3-5) + cast (BC-G4-5).
+    if plan.panel_taxonomy is not None:
+        body[_DD_KEY_PANEL_TAXONOMY] = _panel_taxonomy_to_dict(plan.panel_taxonomy)
+    if plan.cast is not None:
+        body[_DD_KEY_CAST] = _cast_to_dict(plan.cast)
     # BC-D3 (Plan Y v1.2): emit per_item_beats block if any item has beat.
     if per_item_beats is not None:
         body[_DD_KEY_PER_ITEM_BEATS] = per_item_beats
     yaml_text = yaml.safe_dump(body, allow_unicode=True, sort_keys=False)
     return f"{_DESIGN_DIMENSIONS_HEADER}\n\n```yaml\n{yaml_text}```"
+
+
+def _panel_taxonomy_to_dict(
+    pt: dict[str, PanelTypeConfig],
+) -> dict[str, dict[str, Any]]:
+    """Serialize panel_taxonomy; emit only non-None fields per entry."""
+    out: dict[str, dict[str, Any]] = {}
+    for name, cfg in pt.items():
+        entry: dict[str, Any] = {}
+        if cfg.workflow is not None:
+            entry["workflow"] = cfg.workflow
+        if cfg.pulid is not None:
+            entry["pulid"] = dict(cfg.pulid)
+        if cfg.beat_prefix is not None:
+            entry["beat_prefix"] = cfg.beat_prefix
+        if cfg.beat_suffix is not None:
+            entry["beat_suffix"] = cfg.beat_suffix
+        out[name] = entry
+    return out
+
+
+def _cast_to_dict(cast: dict[str, CastEntry]) -> dict[str, dict[str, Any]]:
+    """Serialize cast; type emitted only when non-default, visual when non-empty."""
+    out: dict[str, dict[str, Any]] = {}
+    for char_id, entry in cast.items():
+        d: dict[str, Any] = {"name": entry.name}
+        if entry.type != "human":  # default → omit (round-trip stable)
+            d["type"] = entry.type
+        if entry.visual:
+            d["visual"] = dict(entry.visual)
+        out[char_id] = d
+    return out
 
 
 def _all_layers_empty(plan: Plan) -> bool:

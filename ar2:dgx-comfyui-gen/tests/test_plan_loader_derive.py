@@ -56,27 +56,36 @@ def _make_layer_b(**kwargs):
     )
 
 
+# BC-G9-4 (#009): single base Plan/Item; fixtures via replace so v1.3 / future
+# schema fields auto-propagate instead of being silently dropped.
+_BASE_PLAN = schema.Plan(
+    id="testplan_abcd",
+    title="Test Plan",
+    version=1,
+    created="2026-05-20T00:00:00+08:00",
+    updated="2026-05-20T00:00:00+08:00",
+    status="working",
+    workflow="flux_basic",
+    size=[1024, 1024],
+    steps=20,
+    batch_per_item=1,
+    seed_strategy={"type": "fixed", "base": 42},
+    style_negative="(none)",
+    output_dir="out",
+    items=[],
+)
+_BASE_ITEM = schema.Item(slug="x", prompt="<derived>")
+
+
+def _mk(slug, prompt="<derived>", **ov):
+    return replace(_BASE_ITEM, slug=slug, prompt=prompt, **ov)
+
+
 def _make_plan(items, layer_a=None, layer_b=None,
                style_prefix="(none)", style_suffix="(none)"):
-    return schema.Plan(
-        id="testplan_abcd",
-        title="Test Plan",
-        version=1,
-        created="2026-05-20T00:00:00+08:00",
-        updated="2026-05-20T00:00:00+08:00",
-        status="working",
-        workflow="flux_basic",
-        size=[1024, 1024],
-        steps=20,
-        batch_per_item=1,
-        seed_strategy={"type": "fixed", "base": 42},
-        style_prefix=style_prefix,
-        style_suffix=style_suffix,
-        style_negative="(none)",
-        output_dir="out",
-        items=items,
-        layer_a=layer_a,
-        layer_b=layer_b,
+    return replace(
+        _BASE_PLAN, items=items, layer_a=layer_a, layer_b=layer_b,
+        style_prefix=style_prefix, style_suffix=style_suffix,
     )
 
 
@@ -123,7 +132,7 @@ def test_sentinel_variants_treated_as_manual(not_sentinel):
     when item.full=True) — never invoke derive_prompt.
     """
     plan = _make_plan(
-        items=[schema.Item(slug="x", prompt=not_sentinel, full=False)],
+        items=[_mk(slug="x", prompt=not_sentinel, full=False)],
         style_prefix="comic style", style_suffix="dramatic",
         layer_a=None,  # would trigger EH-4 if derive were called
     )
@@ -142,7 +151,7 @@ def test_sentinel_hit_returns_derive_result_unwrapped():
     they MUST NOT appear in the derived item's final_prompt.
     """
     plan = _make_derivable_plan(
-        items=[schema.Item(slug="ch1_01_hero", prompt="<derived>", full=False)],
+        items=[_mk(slug="ch1_01_hero", prompt="<derived>", full=False)],
         hair_value="long red hair",
         style_prefix="comic style", style_suffix="cinematic",
     )
@@ -160,7 +169,7 @@ def test_dr1_pipe_in_style_anchor_does_not_pollute_derived():
     against caller-side wrap silently breaking it.
     """
     plan = _make_derivable_plan(
-        items=[schema.Item(slug="ch1_01_hero", prompt="<derived>", full=False)],
+        items=[_mk(slug="ch1_01_hero", prompt="<derived>", full=False)],
         hair_value="blue hair",
         style_prefix="anime style | studio ghibli",  # pipe in prefix
         style_suffix="dramatic | dark",               # pipe in suffix
@@ -176,7 +185,7 @@ def test_sentinel_hit_ignores_item_full_flag():
     """
     def _expand_with_full(full_flag: bool):
         plan = _make_derivable_plan(
-            items=[schema.Item(slug="ch1_01_x", prompt="<derived>", full=full_flag)],
+            items=[_mk(slug="ch1_01_x", prompt="<derived>", full=full_flag)],
             hair_value="short",
             style_prefix="comic", style_suffix="hd",
         )
@@ -192,7 +201,7 @@ def test_sentinel_hit_ignores_item_full_flag():
 def test_no_sentinel_outline_unchanged_full_false():
     """BC-G4: outline without sentinel + full=False → prefix + body + suffix."""
     plan = _make_plan(
-        items=[schema.Item(slug="ch1_01_a", prompt="a brave knight", full=False)],
+        items=[_mk(slug="ch1_01_a", prompt="a brave knight", full=False)],
         style_prefix="comic style", style_suffix="cinematic",
     )
     resolved = plan_loader._expand_items(plan)
@@ -203,7 +212,7 @@ def test_no_sentinel_outline_unchanged_full_false():
 def test_no_sentinel_outline_unchanged_full_true():
     """BC-G4: outline without sentinel + full=True → prompt as-is, no wrap."""
     plan = _make_plan(
-        items=[schema.Item(slug="ch1_01_a", prompt="self contained prompt", full=True)],
+        items=[_mk(slug="ch1_01_a", prompt="self contained prompt", full=True)],
         style_prefix="comic style", style_suffix="cinematic",
     )
     resolved = plan_loader._expand_items(plan)
@@ -218,9 +227,9 @@ def test_mixed_items_order_preserved_each_takes_its_path():
     """
     plan = _make_derivable_plan(
         items=[
-            schema.Item(slug="ch1_01_a", prompt="manual one", full=False),
-            schema.Item(slug="ch1_02_b", prompt="<derived>", full=False),
-            schema.Item(slug="ch1_03_c", prompt="manual two", full=True),
+            _mk(slug="ch1_01_a", prompt="manual one", full=False),
+            _mk(slug="ch1_02_b", prompt="<derived>", full=False),
+            _mk(slug="ch1_03_c", prompt="manual two", full=True),
         ],
         style_prefix="prefix", style_suffix="suffix",
     )
@@ -247,7 +256,7 @@ def test_import_called_even_when_no_sentinel_items(monkeypatch):
 
     monkeypatch.setattr(plan_loader, "_import_prompt_derive", counting)
     plan = _make_plan(items=[
-        schema.Item(slug="x", prompt="no sentinel here", full=False),
+        _mk(slug="x", prompt="no sentinel here", full=False),
     ])
     plan_loader._expand_items(plan)
     assert calls["n"] == 1
@@ -260,7 +269,7 @@ def test_eh_g2_wraps_derive_error_with_item_context():
     + remediation hint, original exception preserved in __cause__.
     """
     plan = _make_plan(
-        items=[schema.Item(slug="ch1_01_x", prompt="<derived>", full=False)],
+        items=[_mk(slug="ch1_01_x", prompt="<derived>", full=False)],
         layer_a=None,  # triggers EH-4 in derive_prompt
     )
     with pytest.raises(ValueError) as exc_info:
@@ -283,8 +292,8 @@ def test_eh_g3_fail_fast_on_first_sentinel_failure():
     """
     plan = _make_plan(
         items=[
-            schema.Item(slug="ch1_01_first", prompt="<derived>", full=False),
-            schema.Item(slug="ch1_02_second", prompt="<derived>", full=False),
+            _mk(slug="ch1_01_first", prompt="<derived>", full=False),
+            _mk(slug="ch1_02_second", prompt="<derived>", full=False),
         ],
         layer_a=None,
     )
