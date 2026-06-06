@@ -185,10 +185,11 @@ python3 ~/.claude/skills/ar2:dgx-comfyui-gen/scripts/generate.py --preset {prese
 | `--id BASE_ID` | （with --from-manifest）base id；產出 id = `{BASE_ID}_{W}x{H}` |
 | `--route-policy conservative\|aggressive` | （with --from-manifest）layerdiffuse_native 件處置，預設 conservative |
 | `--workflow NAME` | （with --from-manifest）route=none 件的 plan 級 workflow，預設 flux_basic |
+| `--include-spine-static` | （with --from-manifest）額外收 `fitPolicy=gen_optin_spine` 可產 spine-static 件（manifest 1.1.0+；S2 元件手術靜替圖），預設不收 |
 
 ## --from-manifest（換皮 manifest 匯入）
 
-把 uk:local-play `gen-manifest --style` 產的 `comfyui-reskin-manifest` v1.0.0 JSON 轉成可直接 `gen --plan` 的 outline（實作 `scripts/plan_manifest_import.py`，BC 測試 `tests/test_manifest_import.py`）：
+把 uk:local-play `gen-manifest --style` 產的 `comfyui-reskin-manifest` v1.x JSON（認證至 1.1.x）轉成可直接 `gen --plan` 的 outline（實作 `scripts/plan_manifest_import.py`，BC 測試 `tests/test_manifest_import.py`）：
 
 ```bash
 python3 .../plan_main.py --from-manifest manifest.json --title "722 換皮" --id reskin_722
@@ -199,7 +200,7 @@ python3 .../plan_main.py --from-manifest manifest.json --title "722 換皮" --id
 承重設計（詳見模組 docstring）：
 - **genSize 分桶多 plan**：plan 級 `size` 消費兩維（gen plan_runner 注入 width/height）→ 每個 distinct genSize 一份 plan，全件精確比例零失真（2026-06-06 DGX 實機 smoke 證實 640×1024 PNG 原比例產出）。
 - **走 `ps.Plan` + `ps.serialize()`** 不手拼 frontmatter；`full?=✓` + Style anchor 全 `(none)`（manifest positive 已 self-contained；Negative 禁填 globalNegative——flux_basic 單 CLIPTextEncode，非空 negative 會整批 inject raise）。
-- **入表過濾**：只收 `fitPolicy=gen_bucket_then_resize`；spine / placeholder / dedup 全擋在 importer（gen 對表中每列無條件 submit）。
+- **入表過濾**：預設只收 `fitPolicy=gen_bucket_then_resize`；spine / placeholder / dedup 全擋在 importer（gen 對表中每列無條件 submit）。`--include-spine-static` 額外收 `gen_optin_spine` 可產 spine 件（postprocess_matte 與 layerdiffuse_native 同 policy 分支：conservative→平圖、aggressive→rembg；產出供 sp.Skeleton→cc.Sprite 手術，落位尺寸以 editor-measure 為準）。
 - **版本鎖（雙鎖）**：manifest 端 `schemaName` + major==1 斷言在讀任何 item 之前（exit 4）；ar2 端靠 sibling-import 同 commit plan_schema。
 - **永不輸出 route=layerdiffuse**（DGX Route B PoC-pending）；conservative 全走 route=none（無 alpha 平圖）；aggressive 依 functionalRole 細分 rembg / vfx_additive（vfx 件逐 slug 列 Open notes 供人工覆核黑底後綴）。
 - exit codes：0 OK / 2 用法錯 / 3 JSON parse / 4 版本斷言 / 5 未知 enum 或 category 保留字。

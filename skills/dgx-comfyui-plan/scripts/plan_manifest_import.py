@@ -4,6 +4,10 @@ uk:local-play gen-manifest --style 產出的換皮工單（155 item）→ 按 ge
 產多份 plans/{id}_{WxH}_outline.md（plan 級 size 消費兩維 plan_runner.py:335-336，
 分桶即可全件精確比例，零失真）。
 
+--include-spine-static（manifest 1.1.0+）：額外收 fitPolicy=gen_optin_spine 的
+可產 spine-static 件（29/33；effect·bonus_scene·極端比例維持 skip）。預設不收
+= 行為與 v1 全同；spine 圖供 S2 元件手術（sp.Skeleton→cc.Sprite）靜替用。
+
 承重設計（P1-manifest2plan-design-spec.md v1.1）：
 - 走 ps.Plan dataclass + ps.serialize()（plan_schema 公開序列化入口），不手拼
   frontmatter 字串 → version 型別 / 必填欄 / 欄位漂移整類風險由 schema 接管。
@@ -34,10 +38,14 @@ import plan_schema as ps
 # ── manifest 端版本鎖（#013 對稱顯式鎖；本 importer 是 manifest 第一個程式化 consumer）──
 _EXPECTED_SCHEMA_NAME = "comfyui-reskin-manifest"
 _EXPECTED_MAJOR = 1
+_CERTIFIED_MINOR = 1  # 已認證消費到 1.1.x（gen_optin_spine）；更高 minor → WARN 不擋
 
 # 入表過濾：只收可生成項（gen 對 Items 表每列無條件 submit，無 skip 機制 —
 # plan_runner.py:315 `for item in loaded.items`；過濾是 importer 的責任）。
 _GENWORTHY_FIT_POLICY = "gen_bucket_then_resize"
+# manifest 1.1.0+：可產 spine-static 件標 gen_optin_spine（真 prompt + genSize 全齊），
+# 須 --include-spine-static 顯式 opt-in 才入表（schema 語意：預設視同 skip）。
+_SPINE_OPTIN_FIT_POLICY = "gen_optin_spine"
 
 # alphaStrategy.mode 封閉 enum（COMFYUI_PROMPT_SCHEMA.md v1.0.0）。未知值 exit 5。
 _KNOWN_ALPHA_MODES = frozenset({"layerdiffuse_native", "postprocess_matte", "none"})
@@ -92,11 +100,11 @@ def _assert_manifest_version(data: dict, src: str) -> str | None:
             "major 破壞性變更，importer 須同步更新後才能消費"
         )
     minor_str = raw_ver.split(".")[1] if raw_ver.count(".") >= 1 else "0"
-    if minor_str.isdigit() and int(minor_str) > 0:
+    if minor_str.isdigit() and int(minor_str) > _CERTIFIED_MINOR:
         # minor=純加欄位向後相容（schema 自宣告），但語意漂移不可偵測 → WARN 不擋。
         _warn(
-            f"manifest schemaVersion={raw_ver}（minor > 本 importer 認證的 1.0.x）："
-            "新欄位將被忽略；若語意有變請人工核對"
+            f"manifest schemaVersion={raw_ver}（minor > 本 importer 認證的 "
+            f"{_EXPECTED_MAJOR}.{_CERTIFIED_MINOR}.x）：新欄位將被忽略；若語意有變請人工核對"
         )
     return None
 
@@ -120,13 +128,14 @@ def _resolve_route(mode: str, role: str, policy: str) -> tuple[str, str | None]:
     conservative：layerdiffuse_native → none（無 alpha 平圖，整批保證不 abort；
     83/90 件暫無真 alpha 是 DGX Route B pending 的硬限制傳導，非 importer 缺陷）。
     aggressive：明確自發光 role → vfx_additive/semi；其餘 → rembg/opaque。
+
+    postprocess_matte（spine 件，manifest 1.1.0 起經 --include-spine-static 入表）
+    與 layerdiffuse_native 同分支：manifest 的 matteNode=BiRefNet 是建議非契約，
+    DGX 實際 matte 路線 = rembg(InSPyReNet)；spine 多硬邊物件正是 rembg 設計路線。
     """
     if mode == "none":
         return "none", None
-    # postprocess_matte 屬 spine（BiRefNet），已被 fitPolicy 過濾擋掉；防衛性同 none。
-    if mode == "postprocess_matte":
-        return "none", None
-    # layerdiffuse_native
+    # layerdiffuse_native / postprocess_matte
     if policy == "conservative":
         return "none", None
     if role in _VFX_ROLES:
@@ -168,6 +177,7 @@ def _build_open_notes(
     policy: str,
     vfx_slugs: list[str],
     ta_present: bool,
+    spine_slugs: list[str] = (),
 ) -> str:
     w, h = bucket_wh
     lines = [
@@ -188,6 +198,11 @@ def _build_open_notes(
         lines.append(
             "- 失真：layerdiffuse_native 件以 route=none 平圖產出（無真 alpha）——"
             "DGX Route B LayerDiffuse pending 的傳導限制，補建後可重產"
+        )
+    if spine_slugs:
+        lines.append(
+            f"- spine-static opt-in {len(spine_slugs)} 件（gen_optin_spine）：{', '.join(spine_slugs)} — "
+            "產出為 S2 元件手術（sp.Skeleton→cc.Sprite）用靜替圖；落位尺寸以 editor-measure 顯示框為準（非 atlas 圖頁）"
         )
     for slug in vfx_slugs:
         lines.append(
@@ -218,8 +233,13 @@ def from_manifest(
     route_policy: str = "conservative",
     workflow: str = "flux_basic",
     overwrite: bool = False,
+    include_spine_static: bool = False,
 ) -> int:
-    """manifest JSON → N 個 plans/{id}_{WxH}_outline.md（N = distinct genSize 桶）。"""
+    """manifest JSON → N 個 plans/{id}_{WxH}_outline.md（N = distinct genSize 桶）。
+
+    include_spine_static：額外收 fitPolicy=gen_optin_spine 件（manifest 1.1.0+
+    可產 spine-static，產出為 S2 元件手術用靜替圖）。預設 False = 行為與 v1 全同。
+    """
     if route_policy not in _ROUTE_POLICIES:
         return _fail(2, f"--route-policy 必須 {_ROUTE_POLICIES}，got {route_policy!r}")
     if not title:
@@ -254,12 +274,15 @@ def from_manifest(
         return _fail(2, f"--id 不合法：{e}")
 
     # 過濾 + 逐項驗證（exit 5 fail-fast）
+    accepted_policies = {_GENWORTHY_FIT_POLICY}
+    if include_spine_static:
+        accepted_policies.add(_SPINE_OPTIN_FIT_POLICY)
     all_items = data.get("items") or []
     genworthy: list[dict] = []
     skipped: dict[str, int] = {}
     for it in all_items:
         fp = it.get("fitPolicy")
-        if fp != _GENWORTHY_FIT_POLICY:
+        if fp not in accepted_policies:
             skipped[fp or "<missing>"] = skipped.get(fp or "<missing>", 0) + 1
             continue
         mode = (it.get("alphaStrategy") or {}).get("mode")
@@ -309,6 +332,7 @@ def from_manifest(
 
         ta_entries: dict[str, dict] = {}
         vfx_slugs: list[str] = []
+        spine_slugs = [it["id"] for it in bucket if it.get("fitPolicy") == _SPINE_OPTIN_FIT_POLICY]
         items: list[ps.Item] = []
         for it in bucket:
             slug = it["id"]
@@ -364,6 +388,7 @@ def from_manifest(
             open_notes=_build_open_notes(
                 (w, h), bucket, skipped_summary, route_policy, vfx_slugs,
                 ta_present=bool(ta_entries),
+                spine_slugs=spine_slugs,
             ),
             transparent_assets=(
                 {"defaults": dict(_TA_DEFAULTS), "items": ta_entries} if ta_entries else None

@@ -360,6 +360,102 @@ def test_zero_genworthy_warns_exit0(tmp_path):
     assert not _outlines(plans)
 
 
+# ---------- BC-10：spine optin（--include-spine-static · manifest 1.1.0）----------
+
+def _spine_optin_item() -> dict:
+    """manifest 1.1.0 可產 spine 件（gen_optin_spine + 真 prompt + genSize 全齊）。"""
+    return {
+        "id": "spine_optin", "kind": "spine-static", "functionalRole": "cutscene",
+        "fitPolicy": "gen_optin_spine",
+        "genSize": {"w": 1024, "h": 1024}, "finalSize": {"w": 1479, "h": 1020},
+        "alphaStrategy": {"mode": "postprocess_matte", "graphImpact": "appended_after_decode",
+                          "matteNode": "BiRefNet"},
+        "prompt": {"positive": "transition cutscene backdrop, neon theme"},
+        "outputPath": "assets/game/spine/optin.skel",
+    }
+
+
+def _manifest_110_with_optin() -> dict:
+    m = _fixture_manifest()
+    m["schemaVersion"] = "1.1.0"
+    m["items"].append(_spine_optin_item())
+    return m
+
+
+def test_bc10_flag_off_spine_optin_excluded(tmp_path):
+    """預設不收 gen_optin_spine（雙向 AND：不入表 + 計入 skip 摘要 + 桶數不變）。"""
+    rc, plans = _run(tmp_path, manifest=_manifest_110_with_optin())
+    assert rc == 0
+    outs = _outlines(plans)
+    assert len(outs) == 2  # 桶數與 v1 fixture 全同
+    slugs: set[str] = set()
+    for out in outs:
+        slugs |= {i.slug for i in ps.parse(out).items}
+    assert "spine_optin" not in slugs
+    assert slugs == {"sym_a", "plain_bg", "sym_b"}  # 既有 genworthy 全集不變
+
+
+def test_bc10_flag_on_spine_optin_included_conservative(tmp_path):
+    """flag on + conservative：spine 件入表、route=none（無 transparent block）、
+    open_notes 帶 spine 追溯行。"""
+    rc, plans = _run(tmp_path, manifest=_manifest_110_with_optin(),
+                     include_spine_static=True)
+    assert rc == 0
+    target = [o for o in _outlines(plans) if "1024x1024" in o.name]
+    assert len(target) == 1
+    plan = ps.parse(target[0])
+    slugs = {i.slug for i in plan.items}
+    assert "spine_optin" in slugs and {"sym_a", "plain_bg"} <= slugs  # 既有件仍在（AND）
+    assert plan.transparent_assets is None  # conservative：postprocess_matte → none
+    assert "spine-static opt-in 1 件" in plan.open_notes
+    assert "spine_optin" in plan.open_notes
+
+
+def test_bc10_flag_on_aggressive_postprocess_matte_to_rembg(tmp_path):
+    """flag on + aggressive：postprocess_matte → rembg/opaque + per-entry
+    bg_remove_strength（沿用 vfx bug 修法）；整份產出仍零 layerdiffuse（反向 #014）。"""
+    rc, plans = _run(tmp_path, manifest=_manifest_110_with_optin(),
+                     route_policy="aggressive", include_spine_static=True)
+    assert rc == 0
+    found = False
+    for out in _outlines(plans):
+        assert "layerdiffuse" not in out.read_text()
+        ta = ps.parse(out).transparent_assets
+        if ta and "spine_optin" in ta["items"]:
+            entry = ta["items"]["spine_optin"]
+            assert entry["route"] == "rembg" and entry["asset_type"] == "opaque"
+            assert entry["params"]["bg_remove_strength"] == 0.5
+            found = True
+    assert found  # 防偽綠：spine 件必須真的走到 rembg entry
+
+
+def test_bc10_minor_version_warn_threshold(tmp_path, capsys):
+    """認證 minor=1：1.1.0 不 WARN；1.2.0 WARN（仍 exit 0）。"""
+    rc, _ = _run(tmp_path, manifest=_manifest_110_with_optin())
+    assert rc == 0
+    assert "minor > 本 importer 認證的" not in capsys.readouterr().out
+    m = _manifest_110_with_optin()
+    m["schemaVersion"] = "1.2.0"
+    rc, _ = _run(tmp_path, manifest=m)
+    assert rc == 0
+    assert "minor > 本 importer 認證的 1.1.x" in capsys.readouterr().out
+
+
+def test_bc10_cli_flag_dispatch_subprocess(tmp_path):
+    """CLI 接線黑箱（#011）：--include-spine-static 經 plan_main 真傳導到 importer。"""
+    mf = tmp_path / "m.json"
+    mf.write_text(json.dumps(_manifest_110_with_optin(), ensure_ascii=False))
+    r = subprocess.run(
+        [sys.executable, str(SCRIPTS / "plan_main.py"),
+         "--from-manifest", str(mf), "--title", "t", "--id", "cli_sp",
+         "--include-spine-static"],
+        capture_output=True, text=True, cwd=tmp_path,
+    )
+    assert r.returncode == 0, r.stderr
+    out = (tmp_path / "plans" / "cli_sp_1024x1024_outline.md").read_text()
+    assert "spine_optin" in out
+
+
 # ---------- 安全（負面斷言：產出與源碼零連線資訊）----------
 
 def test_security_no_secrets_in_output(tmp_path):

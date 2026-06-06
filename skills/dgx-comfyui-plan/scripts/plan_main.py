@@ -3,6 +3,7 @@
 Subcommands:
   --from-preset {preset_id}              → fork preset → new working plan
   --from-manifest {path|-} --title "..." [--id x] [--route-policy p]
+                  [--include-spine-static]
                                          → comfyui-reskin-manifest JSON →
                                            genSize 分桶多 outline（換皮批次）
   --list                                 → list working plans
@@ -88,6 +89,9 @@ def parse_args() -> argparse.Namespace:
                         "(with --from-manifest；預設 conservative=無 alpha 平圖)")
     p.add_argument("--workflow", default="flux_basic",
                    help="route=none 件的 plan 級 workflow (with --from-manifest)")
+    p.add_argument("--include-spine-static", action="store_true",
+                   help="額外收 fitPolicy=gen_optin_spine 的可產 spine-static 件 "
+                        "(with --from-manifest；manifest 1.1.0+，S2 元件手術靜替圖)")
     return p.parse_args()
 
 
@@ -111,6 +115,7 @@ def main() -> int:
             route_policy=args.route_policy,
             workflow=args.workflow,
             overwrite=args.overwrite,
+            include_spine_static=args.include_spine_static,
         )
 
     if args.list:
