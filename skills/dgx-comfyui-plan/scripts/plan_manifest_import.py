@@ -51,8 +51,12 @@ _VFX_ROLES = frozenset({"light"})
 # 守衛，避免 GPU 產圖後才在 postprocess raise 白燒算力。
 _CATEGORY_RESERVED = frozenset({"source", "mask", "rgb", "alpha", "preview"})
 
-# transparent_assets defaults（對齊 dgx-comfyui-plan/tests/test_transparent_assets.py）。
-_TA_DEFAULTS = {"bg_remove_strength": 0.5, "alpha_shrink": 1, "padding": 8}
+# transparent_assets defaults — 只放 route 通用參數（postprocess 層 alpha_shrink/padding）。
+# ⚠️ bg_remove_strength 是 rembg 專屬 inject 參數（workflow_params.py:187 對應
+# InspyrenetRembgAdvanced.threshold，vfx_additive.json 無此節點 → inject raise）——
+# 混 route plan 不可放 defaults，改為 rembg entry 的 per-item params（2026-06-06 runtime 實證）。
+_TA_DEFAULTS = {"alpha_shrink": 1, "padding": 8}
+_REMBG_PARAMS = {"bg_remove_strength": 0.5}
 
 _ROUTE_POLICIES = ("conservative", "aggressive")
 
@@ -328,6 +332,9 @@ def from_manifest(
                     # transparent route per-item size 為純量正方（plan_runner.py:273 w=h）。
                     "size": max(w, h),
                 }
+                if route == "rembg":
+                    # rembg 專屬 inject 參數走 per-entry params（不可入 defaults，見頂部註解）
+                    ta_entries[slug]["params"] = dict(_REMBG_PARAMS)
                 if route == "vfx_additive":
                     vfx_slugs.append(slug)
             items.append(ps.Item(slug=slug, prompt=_one_line(str(it["prompt"]["positive"])), full=True))

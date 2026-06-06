@@ -205,6 +205,50 @@ def test_bc5_aggressive_no_layerdiffuse(tmp_path):
     assert saw_ta  # aggressive + layerdiffuse_native 件存在 → 必有 transparent block
 
 
+def test_bc5_vfx_no_rembg_param_and_inject_ok(tmp_path):
+    """2026-06-06 runtime bug 回歸：bg_remove_strength 是 rembg 專屬 inject 參數
+    （InspyrenetRembgAdvanced.threshold），不可經 defaults 漏進 vfx entry —
+    否則 vfx_additive.json 無該節點 → inject raise、vfx 件全失敗。"""
+    m = _fixture_manifest()
+    m["items"][0]["functionalRole"] = "light"  # sym_a → vfx_additive
+    rc, plans = _run(tmp_path, manifest=m, route_policy="aggressive")
+    assert rc == 0
+    vfx_template = json.loads((GEN_WORKFLOWS.parent.parent / "dgx-comfyui-transparent" / "workflows" / "vfx_additive.json").read_text())
+    sys.path.insert(0, str(GEN_SCRIPTS))
+    try:
+        import plan_loader  # noqa: E402
+        import workflow_params  # noqa: E402
+        seen_vfx = False
+        for out in _outlines(plans):
+            plan = ps.parse(out)
+            ta = plan.transparent_assets
+            if not ta: continue
+            assert "bg_remove_strength" not in ta.get("defaults", {})  # defaults 禁含 rembg 專屬
+            for slug, entry in ta["items"].items():
+                if entry["route"] == "vfx_additive":
+                    assert "bg_remove_strength" not in (entry.get("params") or {})
+                if entry["route"] == "rembg":
+                    assert (entry.get("params") or {}).get("bg_remove_strength") == 0.5  # rembg 保留
+            loaded = plan_loader._load(out, mode="plan")
+            for item in loaded.items:
+                if item.route != "vfx_additive": continue
+                seen_vfx = True
+                # 端到端：vfx item 的 transparent params 餵 vfx_additive.json inject 不 raise
+                assert "bg_remove_strength" not in (item.transparent or {})
+                # 重現 plan_runner 注入路徑：vfx 的 transparent params 無 bg_remove_strength
+                # → 傳 None → inject 跳過 rembg 節點檢查（舊 bug：0.5 → raise）
+                workflow_params.inject(
+                    copy.deepcopy(vfx_template),
+                    prompt=item.final_prompt, negative_prompt=None,
+                    seed=item.seed, steps=loaded.steps, batch_size=1,
+                    width=512, height=512,
+                    bg_remove_strength=(item.transparent or {}).get("bg_remove_strength"),
+                )
+        assert seen_vfx  # fixture 必須真的產生 vfx 路徑（防偽綠）
+    finally:
+        sys.path.remove(str(GEN_SCRIPTS))
+
+
 def test_bc5_conservative_no_transparent_block(tmp_path):
     """conservative：全 route=none → transparent_assets 整塊不存在（無冗餘 entry）。"""
     rc, plans = _run(tmp_path)
