@@ -1,27 +1,28 @@
-"""SSH connection layer for DGX.
+"""SSH connection layer for DGX (cross-platform).
 
-Public surface:
+Public surface (unchanged):
 - ssh_exec(cmd, timeout) -> CompletedProcess
-- scp_get(remote, local, timeout) -> None (raises on failure)
-- scp_put(local, remote, timeout) -> None (raises on failure)
+- scp_get(remote, local, timeout) -> None
+- scp_put(local, remote, timeout) -> None
 - ping_host(timeout) -> bool
-- ensure_tunnel(timeout) -> None (idempotent, reuses existing tunnel)
+- ensure_tunnel(timeout) -> None
 - tunnel_exists() -> bool
 
-Imports config from the sibling config.py (skill-local). Each skill in the
-ar2:dgx-* family has its own copy until the family hits the extract-base
-threshold (see plan v1 Section 10.7).
+Linux/macOS: sshpass + ssh/scp + lsof (original behavior).
+Windows: PuTTY plink.exe + pscp.exe; socket-based port probe.
+PuTTY tools must be in PATH (default install: C:\\Program Files\\PuTTY\\).
+First DGX connection auto-accepts the host key (idempotent, registry-cached).
 """
 
 from __future__ import annotations
 
 import shutil
+import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-# Make sibling-level import work whether called as script or imported.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import (  # noqa: E402
@@ -34,19 +35,50 @@ from config import (  # noqa: E402
 )
 
 
-class SSHPassMissing(RuntimeError):
-    """sshpass binary is not installed on the local machine."""
+IS_WIN = sys.platform == "win32"
+
+# Windows-only: DGX SSH host key fingerprint. plink/pscp use this via
+# `-hostkey` to skip the PuTTY registry cache entirely (PuTTY's registry
+# write can silently fail under some Windows ACL / portable-install setups,
+# leaving every -batch run prompting forever). Captured from the original
+# host key prompt; rotates only when the DGX SSH server's host key changes.
+DGX_HOSTKEY = "SHA256:OtBB08rctm5cBhh7549/AGRICofd7LXa8Fw2sJXvOOA"
 
 
-def _check_sshpass() -> None:
+class SSHToolingMissing(RuntimeError):
+    """Required SSH tooling is not installed on the local machine."""
+
+
+SSHPassMissing = SSHToolingMissing  # backwards-compat alias for callers
+
+
+def _check_tooling() -> None:
+    if IS_WIN:
+        missing = [t for t in ("plink.exe", "pscp.exe") if shutil.which(t) is None]
+        if missing:
+            raise SSHToolingMissing(
+                f"PuTTY tools missing: {', '.join(missing)}.\n"
+                "Install PuTTY (https://www.putty.org/) and ensure plink.exe and "
+                "pscp.exe are reachable via PATH."
+            )
+        return
     if shutil.which("sshpass") is None:
-        raise SSHPassMissing(
+        raise SSHToolingMissing(
             "sshpass is required but not installed.\n"
-            "Install on macOS: brew install esolitos/ipa/sshpass"
+            "macOS: brew install esolitos/ipa/sshpass\n"
+            "Linux: apt-get install sshpass"
         )
 
 
 def _ssh_base() -> list[str]:
+    if IS_WIN:
+        return [
+            "plink.exe", "-ssh", "-batch",
+            "-hostkey", DGX_HOSTKEY,
+            "-pw", PASSWORD,
+            "-P", str(SSH_PORT),
+            f"{USER}@{HOST}",
+        ]
     return [
         "sshpass", "-p", PASSWORD, "ssh",
         *SSH_OPTS,
@@ -56,6 +88,13 @@ def _ssh_base() -> list[str]:
 
 
 def _scp_base() -> list[str]:
+    if IS_WIN:
+        return [
+            "pscp.exe", "-batch", "-scp",
+            "-hostkey", DGX_HOSTKEY,
+            "-pw", PASSWORD,
+            "-P", str(SSH_PORT),
+        ]
     return [
         "sshpass", "-p", PASSWORD, "scp",
         *SSH_OPTS,
@@ -67,7 +106,7 @@ def ssh_exec(cmd: str, timeout: int = 30) -> subprocess.CompletedProcess:
     """Run a shell command on DGX. Does NOT raise on non-zero exit;
     caller inspects .returncode / .stderr.
     """
-    _check_sshpass()
+    _check_tooling()
     return subprocess.run(
         _ssh_base() + [cmd],
         capture_output=True,
@@ -86,8 +125,9 @@ def _scp_with_retry(
 
     Retries on CalledProcessError or TimeoutExpired up to max_attempts;
     sleeps backoff_sec * attempt between tries (1s, 2s, ...). Raises the
-    last exception after max_attempts. SSHPassMissing is NOT handled here —
-    callers must run _check_sshpass() first so missing-binary errors fail fast.
+    last exception after max_attempts. SSHToolingMissing is NOT handled
+    here — callers must run _check_tooling() first so missing-binary
+    errors fail fast without burning retries.
     """
     for attempt in range(1, max_attempts + 1):
         try:
@@ -106,7 +146,7 @@ def scp_get(
     max_attempts: int = 3,
 ) -> None:
     """Download a single file from DGX. Raises on final failure after retries."""
-    _check_sshpass()
+    _check_tooling()
     _scp_with_retry(
         _scp_base() + [f"{USER}@{HOST}:{remote}", str(local)],
         timeout=timeout,
@@ -121,7 +161,7 @@ def scp_put(
     max_attempts: int = 3,
 ) -> None:
     """Upload a single file to DGX. Raises on final failure after retries."""
-    _check_sshpass()
+    _check_tooling()
     _scp_with_retry(
         _scp_base() + [str(local), f"{USER}@{HOST}:{remote}"],
         timeout=timeout,
@@ -131,8 +171,15 @@ def scp_put(
 
 def ping_host(timeout: int = 2) -> bool:
     """Returns True if DGX responds to a single ICMP ping within timeout."""
+    if IS_WIN:
+        # Windows ping: -n count, -w timeout-ms
+        cmd = ["ping", "-n", "1", "-w", str(timeout * 1000), HOST]
+    else:
+        # macOS/Linux: -c count, -W timeout
+        # Original script passed ms here, which is the macOS interpretation.
+        cmd = ["ping", "-c", "1", "-W", str(timeout * 1000), HOST]
     result = subprocess.run(
-        ["ping", "-c", "1", "-W", str(timeout * 1000), HOST],
+        cmd,
         capture_output=True,
         timeout=timeout + 1,
     )
@@ -140,32 +187,64 @@ def ping_host(timeout: int = 2) -> bool:
 
 
 def tunnel_exists() -> bool:
-    """True if local port COMFYUI_PORT is bound (assumes ours)."""
-    result = subprocess.run(
-        ["lsof", "-ti", f":{COMFYUI_PORT}"],
-        capture_output=True,
-        text=True,
-    )
-    return bool(result.stdout.strip())
+    """True if local port COMFYUI_PORT accepts a TCP connection.
+
+    Replaces the original `lsof -ti :PORT` with a portable socket probe:
+    if something is listening (our tunnel or a foreign process), we treat
+    it as "tunnel present" — same semantics as the original.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(0.5)
+    try:
+        sock.connect(("127.0.0.1", COMFYUI_PORT))
+        return True
+    except (ConnectionRefusedError, OSError):
+        return False
+    finally:
+        sock.close()
 
 
 def ensure_tunnel(timeout: int = 5) -> None:
     """Open a background SSH tunnel localhost:COMFYUI_PORT -> DGX:COMFYUI_PORT.
 
-    No-op if tunnel already exists. Family skills should call this before
-    making local HTTP requests against ComfyUI.
+    No-op if a tunnel/listener is already present. Caller should treat this
+    as best-effort: function returns once tunnel is verified open, or after
+    ~5s wait if the background process is slow.
     """
     if tunnel_exists():
         return
-    _check_sshpass()
-    subprocess.run(
-        [
-            "sshpass", "-p", PASSWORD, "ssh", "-fN",
-            *SSH_OPTS,
-            "-L", f"{COMFYUI_PORT}:localhost:{COMFYUI_PORT}",
-            "-p", str(SSH_PORT),
-            f"{USER}@{HOST}",
-        ],
-        check=True,
-        timeout=timeout,
-    )
+    _check_tooling()
+    if IS_WIN:
+        # Detach plink so the parent script doesn't block on it.
+        subprocess.Popen(
+            ["plink.exe", "-ssh", "-batch", "-N",
+             "-hostkey", DGX_HOSTKEY,
+             "-pw", PASSWORD,
+             "-L", f"{COMFYUI_PORT}:localhost:{COMFYUI_PORT}",
+             "-P", str(SSH_PORT),
+             f"{USER}@{HOST}"],
+            creationflags=(
+                subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+            ),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    else:
+        subprocess.run(
+            [
+                "sshpass", "-p", PASSWORD, "ssh", "-fN",
+                *SSH_OPTS,
+                "-L", f"{COMFYUI_PORT}:localhost:{COMFYUI_PORT}",
+                "-p", str(SSH_PORT),
+                f"{USER}@{HOST}",
+            ],
+            check=True,
+            timeout=timeout,
+        )
+    # Brief wait for the tunnel to come up (handles slow plink spawn on Win).
+    for _ in range(20):
+        if tunnel_exists():
+            return
+        time.sleep(0.25)
