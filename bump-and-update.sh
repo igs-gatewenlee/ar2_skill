@@ -6,10 +6,11 @@
 # `claude plugin update` 認得（它比對 源版本 vs 已裝版本）。
 #
 # Usage:
-#   bash bump-and-update.sh [patch|minor|major|X.Y.Z] [--commit] [--dry-run]
+#   bash bump-and-update.sh [patch|minor|major|X.Y.Z] [--commit] [--push] [--dry-run]
 #
 #   patch (預設) / minor / major  → 自動遞增；或直接給 X.Y.Z 指定版號
 #   --commit    → 連同 git commit 版本 bump
+#   --push      → commit 後 git push（多機同步：其他機器 git pull 即拿到；需已設 remote）
 #   --dry-run   → 只顯示會做什麼，不改檔、不呼叫 claude
 #
 # 開發頻繁改動時，改用免 bump 的 dev 模式：
@@ -22,10 +23,12 @@ MARKET_JSON="$REPO/.claude-plugin/marketplace.json"
 
 BUMP="patch"
 COMMIT=0
+PUSH=0
 DRY=0
 for a in "$@"; do
   case "$a" in
     --commit) COMMIT=1 ;;
+    --push) PUSH=1; COMMIT=1 ;;  # push 蘊含 commit
     --dry-run) DRY=1 ;;
     patch|minor|major) BUMP="$a" ;;
     [0-9]*.[0-9]*.[0-9]*) BUMP="$a" ;;
@@ -64,6 +67,7 @@ echo "🔼 $PLUGIN_NAME: $OLD_VER → $NEW_VER   (marketplace: $MARKET_NAME)"
 if [ "$DRY" = "1" ]; then
   echo "   [dry-run] 會寫 $PLUGIN_JSON version=$NEW_VER"
   [ "$COMMIT" = "1" ] && echo "   [dry-run] 會 git commit 版本 bump"
+  [ "$PUSH" = "1" ] && echo "   [dry-run] 會 git push"
   echo "   [dry-run] 會跑：claude plugin marketplace update $MARKET_NAME"
   echo "   [dry-run] 會跑：claude plugin update $PLUGIN_NAME@$MARKET_NAME"
   exit 0
@@ -84,6 +88,14 @@ if [ "$COMMIT" = "1" ]; then
   git -C "$REPO" add "$PLUGIN_JSON"
   git -C "$REPO" commit -q -m "chore(plugin): bump $PLUGIN_NAME → $NEW_VER"
   echo "📝 committed: bump $PLUGIN_NAME → $NEW_VER"
+fi
+
+if [ "$PUSH" = "1" ]; then
+  if git -C "$REPO" remote get-url origin >/dev/null 2>&1; then
+    git -C "$REPO" push && echo "🚀 pushed to $(git -C "$REPO" remote get-url origin)"
+  else
+    echo "⚠️ 未設 remote origin，跳過 push（其他機器將拉不到此版本）"
+  fi
 fi
 
 echo "🔄 claude plugin marketplace update $MARKET_NAME ..."

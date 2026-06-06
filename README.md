@@ -14,25 +14,41 @@
 
 典型工作流：**check** → **plan** → **gen** / **train** / **transparent**。
 
-## Install（plugin marketplace）
+## Install（plugin marketplace · 多機）
 
-本 repo 自帶 `.claude-plugin/marketplace.json`，可直接當 local-path marketplace。在 Claude Code 內：
+源碼 repo：`git@github.com:igs-gatewenlee/ar2_skill.git`（**私有**——含 DGX 私網明文密碼文件，⛔ 不可轉公開）。本 repo 自帶 `.claude-plugin/marketplace.json`，clone 下來即是 local marketplace。
 
+**任何機器首裝**：
+```bash
+git clone git@github.com:igs-gatewenlee/ar2_skill.git <你的位置>   # Mac: ~/Code/ar2-skills；Win 例: I:\ar2-skills
+# ⚠️ config.py 是 gitignored、不會跟著 clone —— check/gen/train 3 個 skill 的 config.py 要手動放一次
 ```
-/plugin marketplace add /Users/gatewenlee/Code/ar2-skills
+在 Claude Code 內：
+```
+/plugin marketplace add <你的位置>
 /plugin install ar2@ar2-marketplace
 ```
+裝好後 5 個 `ar2:dgx-comfyui-*` skill 自動發現 + `/ar2:upgrade` command。
 
-裝好後 5 個 `ar2:dgx-comfyui-*` skill 即自動發現（`skills/` 下每個 `SKILL.md` 一個）、description 自動觸發。
+**之後更新（任何機器、消費用）**：
+```
+/ar2:upgrade        # = git pull → marketplace update → plugin update（不 bump）
+/reload-plugins     # 套用
+```
 
-> **注意（copy-to-cache）**：marketplace 安裝會把 plugin 複製到 `~/.claude/plugins/cache/`，源檔 Edit **不會即時生效**。改完源碼後跑 `/plugin update ar2`（需 bump `.claude-plugin/plugin.json` 的 `version`）。
+**開發發布（改完源碼的那台機）**：
+```
+/ar2:upgrade dev    # = bump patch + commit + push + update
+# 或在 repo 內：bash bump-and-update.sh [patch|minor|major] --push
+```
+> bump 只該發生在開發機；消費機永遠用同步模式，否則多機版本歷史會分岔。
 
-**開發模式（源檔即時生效）**：用 `--plugin-dir` 直接載入、不走 cache：
+> **copy-to-cache**：marketplace 安裝是把 plugin 複製到 `~/.claude/plugins/cache/`，源檔 Edit 不即時生效——所以才需要上面的 update 流程。`/ar2:upgrade` 的源碼路徑是從本機 marketplace 註冊**動態解析**（`known_marketplaces.json`），跨機不用改。
 
+**開發模式（源檔即時生效、免 bump）**：
 ```bash
-claude --plugin-dir /Users/gatewenlee/Code/ar2-skills
-# 改完源碼後在 session 內：
-/reload-plugins
+claude --plugin-dir <你的位置>
+# 改完源碼後在 session 內：/reload-plugins
 ```
 
 ## 個別 skill 文件
