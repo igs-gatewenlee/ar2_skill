@@ -2,6 +2,9 @@
 
 Subcommands:
   --from-preset {preset_id}              → fork preset → new working plan
+  --from-manifest {path|-} --title "..." [--id x] [--route-policy p]
+                                         → comfyui-reskin-manifest JSON →
+                                           genSize 分桶多 outline（換皮批次）
   --list                                 → list working plans
   --show                                 → list presets
   --show {preset_id}                     → cat preset detail
@@ -25,6 +28,7 @@ import sys
 from pathlib import Path
 
 import plan_from_preset
+import plan_manifest_import
 import plan_promote
 import plan_show
 import plan_validate
@@ -54,6 +58,9 @@ def parse_args() -> argparse.Namespace:
     g = p.add_mutually_exclusive_group()
     g.add_argument("--from-preset", metavar="PRESET_ID",
                    help="Fork preset → new working plan (interactive 改)")
+    g.add_argument("--from-manifest", metavar="PATH",
+                   help="comfyui-reskin-manifest JSON（或 - 讀 stdin）→ "
+                        "genSize 分桶產多份 outline（換皮批次產圖）")
     g.add_argument("--list", action="store_true",
                    help="List working plans in cwd/plans/")
     g.add_argument("--show", nargs="?", const=_SHOW_LIST_SENTINEL,
@@ -69,7 +76,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--desc", default=None,
                    help="One-line description (with --promote)")
     p.add_argument("--overwrite", action="store_true",
-                   help="Overwrite existing preset (with --promote)")
+                   help="Overwrite existing preset / outline "
+                        "(with --promote / --from-manifest)")
+    p.add_argument("--id", default=None, dest="manifest_plan_id",
+                   help="Base plan id (with --from-manifest；缺省從 style id 衍生)")
+    p.add_argument("--title", default=None,
+                   help="Plan title (with --from-manifest，必填)")
+    p.add_argument("--route-policy", default="conservative",
+                   choices=["conservative", "aggressive"],
+                   help="layerdiffuse_native 件的 route 策略 "
+                        "(with --from-manifest；預設 conservative=無 alpha 平圖)")
+    p.add_argument("--workflow", default="flux_basic",
+                   help="route=none 件的 plan 級 workflow (with --from-manifest)")
     return p.parse_args()
 
 
@@ -79,6 +97,20 @@ def main() -> int:
     if args.from_preset is not None:
         return plan_from_preset.from_preset(
             _presets_dir(), _plans_dir(), args.from_preset
+        )
+
+    if args.from_manifest is not None:
+        if not args.title:
+            sys.stderr.write("ERROR: --from-manifest 需要 --title\n")
+            return 2
+        return plan_manifest_import.from_manifest(
+            args.from_manifest,
+            _plans_dir(),
+            plan_id=args.manifest_plan_id,
+            title=args.title,
+            route_policy=args.route_policy,
+            workflow=args.workflow,
+            overwrite=args.overwrite,
         )
 
     if args.list:

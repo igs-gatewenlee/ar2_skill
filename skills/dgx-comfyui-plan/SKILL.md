@@ -1,6 +1,6 @@
 ---
 name: dgx-comfyui-plan
-description: Use when the user asks to "建立 plan", "批量產圖計劃", "from-preset", "show presets", "promote 滿意的 plan", or wants to design a structured outline.md plan for batch image generation via ar2:dgx-comfyui-gen. Plans are authored either by forking a preset (`--from-preset`) or by Claude composing outline.md directly in chat; writes plans/{id}_outline.md (YAML frontmatter + Markdown body + items table). Supports preset library (promote / from-preset / show) for cross-machine sharing via git. Pure local (no SSH to DGX). NOT for: actual image generation (use ar2:dgx-comfyui-gen --plan), LoRA training (use ar2:dgx-comfyui-train).
+description: Use when the user asks to "建立 plan", "批量產圖計劃", "from-preset", "show presets", "promote 滿意的 plan", "from-manifest", "換皮 manifest 轉 plan", or wants to design a structured outline.md plan for batch image generation via ar2:dgx-comfyui-gen. Plans are authored by forking a preset (`--from-preset`), by Claude composing outline.md directly in chat, or by importing a uk:local-play comfyui-reskin-manifest (`--from-manifest`, genSize 分桶產多份 outline); writes plans/{id}_outline.md (YAML frontmatter + Markdown body + items table). Supports preset library (promote / from-preset / show) for cross-machine sharing via git. Pure local (no SSH to DGX). NOT for: actual image generation (use ar2:dgx-comfyui-gen --plan), LoRA training (use ar2:dgx-comfyui-train).
 ---
 
 # ar2:dgx-comfyui-plan
@@ -173,13 +173,36 @@ python3 ~/.claude/skills/ar2:dgx-comfyui-gen/scripts/generate.py --preset {prese
 |------|------|
 | (no args) | ⚠️ DEPRECATED — prints notice, exits 2. Use --from-preset or chat. |
 | `--from-preset PRESET_ID` | Fork preset → new working plan（含 interactive 改） |
+| `--from-manifest PATH\|-` | comfyui-reskin-manifest JSON（uk:local-play gen-manifest 產出）→ **genSize 分桶**產多份 outline（換皮批次；見下節） |
 | `--list` | 列 cwd/plans/ 內所有 working plans |
 | `--show` | 列所有 presets |
 | `--show PRESET_ID` | Cat 一個 preset 內容 |
 | `--promote WORKING_ID` | 升 working plan 為 preset |
 | `--tags x,y` | （with --promote）逗號分隔 tags |
 | `--desc "..."` | （with --promote）一行描述 |
-| `--overwrite` | （with --promote）覆蓋既有 preset（含 .bak） |
+| `--overwrite` | （with --promote / --from-manifest）覆蓋既有 preset / outline |
+| `--title "..."` | （with --from-manifest，必填）plan title |
+| `--id BASE_ID` | （with --from-manifest）base id；產出 id = `{BASE_ID}_{W}x{H}` |
+| `--route-policy conservative\|aggressive` | （with --from-manifest）layerdiffuse_native 件處置，預設 conservative |
+| `--workflow NAME` | （with --from-manifest）route=none 件的 plan 級 workflow，預設 flux_basic |
+
+## --from-manifest（換皮 manifest 匯入）
+
+把 uk:local-play `gen-manifest --style` 產的 `comfyui-reskin-manifest` v1.0.0 JSON 轉成可直接 `gen --plan` 的 outline（實作 `scripts/plan_manifest_import.py`，BC 測試 `tests/test_manifest_import.py`）：
+
+```bash
+python3 .../plan_main.py --from-manifest manifest.json --title "722 換皮" --id reskin_722
+# → plans/reskin_722_1024x1024_outline.md / reskin_722_640x1024_outline.md / ...
+# → 逐桶 ar2:dgx-comfyui-gen --plan reskin_722_<WxH>
+```
+
+承重設計（詳見模組 docstring）：
+- **genSize 分桶多 plan**：plan 級 `size` 消費兩維（gen plan_runner 注入 width/height）→ 每個 distinct genSize 一份 plan，全件精確比例零失真（2026-06-06 DGX 實機 smoke 證實 640×1024 PNG 原比例產出）。
+- **走 `ps.Plan` + `ps.serialize()`** 不手拼 frontmatter；`full?=✓` + Style anchor 全 `(none)`（manifest positive 已 self-contained；Negative 禁填 globalNegative——flux_basic 單 CLIPTextEncode，非空 negative 會整批 inject raise）。
+- **入表過濾**：只收 `fitPolicy=gen_bucket_then_resize`；spine / placeholder / dedup 全擋在 importer（gen 對表中每列無條件 submit）。
+- **版本鎖（雙鎖）**：manifest 端 `schemaName` + major==1 斷言在讀任何 item 之前（exit 4）；ar2 端靠 sibling-import 同 commit plan_schema。
+- **永不輸出 route=layerdiffuse**（DGX Route B PoC-pending）；conservative 全走 route=none（無 alpha 平圖）；aggressive 依 functionalRole 細分 rembg / vfx_additive（vfx 件逐 slug 列 Open notes 供人工覆核黑底後綴）。
+- exit codes：0 OK / 2 用法錯 / 3 JSON parse / 4 版本斷言 / 5 未知 enum 或 category 保留字。
 
 ## Outline.md 結構
 
