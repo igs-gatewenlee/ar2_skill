@@ -1,6 +1,6 @@
 {
   "name": "ar2",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "DGX/ComfyUI 圖像生成 skill 家族（check 機器體檢 / gen 產圖 / plan 計畫驅動批次 / train Flux LoRA / transparent 透明素材）。呼叫名 ar2:dgx-comfyui-* 由 plugin namespace 合成。",
   "author": {
     "name": "gatewen",
