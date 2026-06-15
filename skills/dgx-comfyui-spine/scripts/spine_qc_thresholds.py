@@ -13,8 +13,16 @@ INTERMEDIATE_PREFIXES = (
     "viz", "composite", "reference", "starpose", "poc",
 )
 
-# 預設 draw_order（小=底層先畫；沿用 PoC manifest 語意：torso 底 / head / arm 前）
-DEFAULT_DRAW_ORDER = {"torso": 0, "head": 1, "upper_arm_l": 2, "upper_arm_r": 2}
+# 預設 draw_order（小=底層先畫；front-view 由後到前；同層重複合法）。未列者 spine.py 給 fallback。
+DEFAULT_DRAW_ORDER = {
+    "leg_l": 0, "leg_r": 0, "legs": 0,
+    "skirt": 1,
+    "torso": 2,
+    "head": 3,
+    "upper_arm_l": 4, "upper_arm_r": 4,
+    "lower_arm_l": 5, "lower_arm_r": 5,
+    "hand_l": 6, "hand_r": 6, "foot_l": 6, "foot_r": 6,
+}
 
 # --- QC 閾值（全部暫定·tunable）---
 ALPHA_OPAQUE_THRESH = 10        # part alpha > 此 = 不透明（content_bbox / 覆蓋 / 重疊用）

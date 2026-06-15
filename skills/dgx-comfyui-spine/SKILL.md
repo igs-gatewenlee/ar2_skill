@@ -11,13 +11,13 @@ description: Use when the user asks to "把角色拆件 / 切成部件 / 做 Spi
 
 停在「部件包」中性資產，**不碰**：① 骨架綁定 / Spine 檔（.json/.skel）/ 程序動畫 / mesh 變形；② 補洞（inpaint 語意不可控，PoC 已否證）；③ LayerDiffuse 分層（DGX 缺節點+SDXL）。
 
-## v1 部件範圍（已 PoC 拍板）
+## 部件範圍
 
-| 納入 v1（已端到端實證可切） | 不在 v1（留 v2） |
-|------|------|
-| `head` / `torso` / `upper_arm_l` / `upper_arm_r` | **legs**（合併件實測覆蓋率僅 63%、衣物色彩斷層通病）、L/R 分腿（死點：大腿相連無真實邊界）、lower_arm/hand/foot（小件未測）、全自動部位定位（DGX 缺 detector/CLIPSeg/human-parser） |
+- **QC 必備（gate1 分母）**：`head / torso / upper_arm_l / upper_arm_r`（`EXPECTED_PARTS`）。
+- **可額外切（hint-dir 放對應 hint 即切）**：`skirt / leg_l / leg_r / legs / lower_arm_* / hand_* / foot_*` 等任意 slug。hintfg 在 **hint 邊界**切，故 **L/R 分腿 OK**（在中線切，不需 SAM 要的真實邊界 → SAM 的「大腿相連死點」對 hintfg 不成立）；多色部件（頭=髮+膚、穿衣）也不漏色。
+- **仍不適**：全自動部位定位（半自動：切點/部位分界靠人標 hint）；非白底 reference（hintfg 前景判定靠白底）。
 
-> v1 是**半自動**：人標粗框 hint 在環內。SAM 是「精修器」（粗框進、貼合輪廓出），**切點/部位分界靠人標 hint**，非全自動定位。
+> 半自動：人標粗框 hint 在環內。預設 **hintfg**（part = hint ∩ 白底前景）；`--method sam` 為非白底/自動邊精修選項。
 
 ## 5 步半自動流程
 
@@ -37,10 +37,13 @@ description: Use when the user asks to "把角色拆件 / 切成部件 / 做 Spi
 
 ```bash
 python3 scripts/spine.py --character-id mychar \
-  --hint-dir <dir 內含 head.png/torso.png/upper_arm_l.png/upper_arm_r.png 粗框 hint> \
-  [--reference ref.png]   # 給了就跳過生成；否則用內建白底 star-pose prompt 生成
-  [--prompt "..."] [--size 1024] [--seed 20260615]
+  --hint-dir <dir 內放每部件一張 <slug>.png 粗框 hint（必備 4 件 + 可加 skirt/leg_l/leg_r…）> \
+  [--reference ref.png]   # 給了就跳過生成（+白底 hintfg → 整條切件零 DGX）；否則用內建白底 star-pose prompt 生成
+  [--method hintfg|sam] [--dilate 16] [--prompt "..."] [--size 1024] [--seed 20260615]
 ```
+
+- `--dilate N`：關節 overlap 帶（各部件外擴 N px 夾前景，相鄰在關節縫重疊消縫）。實證 dilate 16~24 把覆蓋率從 ~0.77 推到 ~0.97。0=不擴。
+- hint-dir 內**所有** `<slug>.png` 都會被切（不限必備 4 件）。
 
 輸出 `outputs/ar2-dgx-comfyui-spine/{date}_{character_id}/{reference.png, parts/*.png, manifest.json, qc_report.json}`。
 

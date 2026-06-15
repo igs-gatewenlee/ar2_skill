@@ -129,18 +129,23 @@ def run(args) -> int:
     if args.method == "sam":
         ssh_client.scp_put(ref_path, f"{INPUT_DIR}/{char_remote}")
 
+    # 切 hint-dir 內所有 <slug>.png（不限固定 4 件 → 可給 skirt/leg_l/leg_r 等）；
+    # EXPECTED_PARTS 仍是 QC 閘1 的「必備分母」，缺則 QC 標 missing。
     hint_dir = Path(args.hint_dir)
+    hint_files = sorted(hint_dir.glob("*.png"))
+    present = {h.stem for h in hint_files}
+    for req in T.EXPECTED_PARTS:
+        if req not in present:
+            print(f"⚠️ 缺必備 hint {req}.png（QC 閘1 會標 missing）")
+
     parts: dict = {}
-    for name in T.EXPECTED_PARTS:
-        hint = hint_dir / f"{name}.png"
-        if not hint.exists():
-            print(f"⚠️ 缺 hint {hint}（part {name} 跳過，QC 閘1 會標 missing）")
-            continue
-        print(f"🔵 切件 {name}（{args.method}）...")
+    for hint in hint_files:
+        name = hint.stem
+        print(f"🔵 切件 {name}（{args.method}{'+dilate'+str(args.dilate) if args.dilate else ''}）...")
         if args.method == "sam":
             part_rgba, bbox = _cut_part_sam(name, reference, hint, char_remote, run_tag)
         else:  # hintfg（白底預設）：part = hint ∩ 前景，純本地
-            full, bbox = spine_cut.cut_part(reference, Image.open(hint))
+            full, bbox = spine_cut.cut_part(reference, Image.open(hint), dilate=args.dilate)
             if bbox is None:
                 print(f"⚠️ part {name} hint∩前景 全空（hint 沒對到前景？）跳過")
                 continue
@@ -177,6 +182,8 @@ def main():
     ap.add_argument("--seed", type=int, default=20260615)
     ap.add_argument("--method", choices=["hintfg", "sam"], default="hintfg",
                     help="hintfg=hint∩前景（白底預設·純本地·多色/瘦件穩） / sam=SAM 精修（非白底 / 需自動邊精修）")
+    ap.add_argument("--dilate", type=int, default=0,
+                    help="關節 overlap 帶 px（hintfg）：各部件外擴夾前景、相鄰在關節縫重疊消縫。0=不擴")
     return run(ap.parse_args())
 
 

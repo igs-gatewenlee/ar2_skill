@@ -233,3 +233,21 @@ def test_spine_cut_empty_when_hint_misses_fg():
     ImageDraw.Draw(hint).rectangle((20, 20, 35, 35), fill=255)  # hint 在白底區
     full, bbox = spine_cut.cut_part(ref, hint)
     assert full is None and bbox is None
+
+
+def test_spine_cut_dilate_grows_within_fg_only():
+    # 水平前景條 + 只蓋左半的 hint；dilate 後往右長（夾前景）覆蓋更多、但不長進背景
+    ref = Image.new("RGB", (60, 30), (255, 255, 255))
+    rp = ref.load()
+    for y in range(10, 20):
+        for x in range(5, 55):
+            rp[x, y] = (50, 50, 50)
+    hint = Image.new("L", (60, 30), 0)
+    ImageDraw.Draw(hint).rectangle((5, 8, 25, 22), fill=255)
+    f0, _ = spine_cut.cut_part(ref, hint, dilate=0)
+    f1, _ = spine_cut.cut_part(ref, hint, dilate=6)
+    a0 = int((np.asarray(f0)[..., 3] > 0).sum())
+    a1 = int((np.asarray(f1)[..., 3] > 0).sum())
+    assert a1 > a0  # dilate 後覆蓋更多前景（關縫）
+    fg = spine_cut.foreground_mask(ref)
+    assert int(((np.asarray(f1)[..., 3] > 0) & ~fg).sum()) == 0  # 不長進背景

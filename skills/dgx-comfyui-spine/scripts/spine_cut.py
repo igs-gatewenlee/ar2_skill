@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import numpy as np
 from PIL import Image
+from scipy.ndimage import binary_dilation
 
 import manifest_builder as mb
 import spine_qc_thresholds as T
@@ -24,15 +25,22 @@ def foreground_mask(ref: Image.Image, *, delta: int = T.WHITE_BG_FG_DELTA) -> np
     return (255 - a).sum(axis=2) > delta
 
 
-def cut_part(ref: Image.Image, hint: Image.Image, *, delta: int = T.WHITE_BG_FG_DELTA):
+def cut_part(ref: Image.Image, hint: Image.Image, *,
+             delta: int = T.WHITE_BG_FG_DELTA, dilate: int = 0):
     """回 (full_rgba, bbox)。full_rgba = reference 尺寸、alpha = hint∩前景；
-    bbox = content_bbox(padding=0)。hint∩前景 全空回 (None, None)。"""
+    bbox = content_bbox(padding=0)。hint∩前景 全空回 (None, None)。
+
+    dilate>0：關節 overlap 帶——把 mask 外擴 dilate px 但**夾在前景內**（不長進背景）。
+    相鄰部件各自外擴 → 在關節縫重疊 → 縫消除（PoC §6.4 已證）。本地、無 DGX。
+    """
     fg = foreground_mask(ref, delta=delta)
     hl = hint.convert("L")
     if hl.size != ref.size:
         hl = hl.resize(ref.size)
     h = np.asarray(hl) > 127
     mask = fg & h
+    if dilate and dilate > 0:
+        mask = binary_dilation(mask, iterations=int(dilate)) & fg  # 夾前景，往相鄰部件方向關縫
     arr = np.asarray(ref.convert("RGBA")).copy()
     arr[..., 3] = np.where(mask, 255, 0).astype(np.uint8)
     full = Image.fromarray(arr, "RGBA")
