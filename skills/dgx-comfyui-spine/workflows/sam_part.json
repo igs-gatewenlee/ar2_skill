@@ -1,0 +1,10 @@
+{
+  "_comment": "sam_part: 單部件 SAM 半自動精修切件圖（PoC sam_cut_legs.py 升格）。SAM=精修器（粗框 hint 進、貼合輪廓出）。__CHAR__/__HINT__/__PREFIX__ 由 spine_sam.build_sam_workflow 注入。需 DGX 裝 sam_vit_b_01ec64.pth + ComfyUI-Impact-Pack。送 /prompt 前 strip 非 dict key（BC-6）。",
+  "1": {"class_type": "LoadImage", "inputs": {"image": "__CHAR__"}},
+  "2": {"class_type": "LoadImageMask", "inputs": {"image": "__HINT__", "channel": "red"}},
+  "3": {"class_type": "SAMLoader", "inputs": {"model_name": "sam_vit_b_01ec64.pth", "device_mode": "AUTO"}},
+  "4": {"class_type": "MaskToSEGS", "inputs": {"mask": ["2", 0], "combined": true, "crop_factor": 3.0, "bbox_fill": false, "drop_size": 10, "contour_fill": false}},
+  "5": {"class_type": "SAMDetectorCombined", "inputs": {"sam_model": ["3", 0], "segs": ["4", 0], "image": ["1", 0], "detection_hint": "center-1", "dilation": 0, "threshold": 0.93, "bbox_expansion": 0, "mask_hint_threshold": 0.7, "mask_hint_use_negative": "False"}},
+  "6": {"class_type": "MaskToImage", "inputs": {"mask": ["5", 0]}},
+  "7": {"class_type": "SaveImage", "inputs": {"filename_prefix": "__PREFIX__", "images": ["6", 0]}}
+}

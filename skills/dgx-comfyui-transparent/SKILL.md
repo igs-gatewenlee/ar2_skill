@@ -1,6 +1,6 @@
 ---
 name: dgx-comfyui-transparent
-description: Use when the user asks to "產透明素材", "去背素材", "遊戲透明 PNG", "transparent game asset", "produce sprite/icon with alpha", or wants ComfyUI 產出帶真實 Alpha 的遊戲素材（去背路線 InSPyReNet / LayerDiffuse 路線）在 DGX (192.168.5.27)。Route A（去背）為 v1 交付；Route B（LayerDiffuse semi VFX）PoC-pending。NOT for：一般產圖（用 ar2:dgx-comfyui-gen）、模型盤點（ar2:dgx-comfyui-check）、LoRA 訓練（ar2:dgx-comfyui-train）。
+description: Use when the user asks to "產透明素材", "去背素材", "遊戲透明 PNG", "transparent game asset", "produce sprite/icon with alpha", or wants ComfyUI 產出帶真實 Alpha 的遊戲素材（去背路線 InSPyReNet / LayerDiffuse 路線）在 DGX (192.168.5.27)。Route A（去背）為 v1 交付；Route B（LayerDiffuse semi VFX）PoC-pending。NOT for：角色多部件切件/Spine 部件包（用 ar2:dgx-comfyui-spine）、一般產圖（用 ar2:dgx-comfyui-gen）、模型盤點（ar2:dgx-comfyui-check）、LoRA 訓練（ar2:dgx-comfyui-train）。
 ---
 
 # ar2:dgx-comfyui-transparent
