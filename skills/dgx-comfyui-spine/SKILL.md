@@ -24,10 +24,14 @@ description: Use when the user asks to "把角色拆件 / 切成部件 / 做 Spi
 ```
 1. Flux star-pose 白底 reference 生成（正向 prompt，無 negative 節點避 negation trap）
 2. 人對每部件標一張粗框 hint PNG（<slug>.png，白=該部件大致範圍）
-3. 逐部件 SAM 精修（sam_vit_b + MaskToSEGS + SAMDetectorCombined）貼合輪廓
-4. compose_rgba(straight)+edge_bleed+fix_alpha → content_bbox(padding=0) 裁出帶 alpha part PNG
+3. 逐部件切件：
+   • 預設 hintfg —— part = hint ∩ 白底前景（純本地、無 DGX；多色部件不漏、瘦件不 over-grab）
+   • --method sam —— SAM 精修（非白底 / 需自動邊精修時；單 seed 跨不過色彩斷層，白底不建議）
+4. edge_bleed + fix_alpha 邊緣羽化 → content_bbox(padding=0) 裁出帶 alpha part PNG
 5. 組 manifest.json → 8 閘 QC → qc_report.json
 ```
+
+> ⚠️ **切件 primitive（demo 實證）**：白底 reference 用 **hintfg**（hint 定區域、白底前景定 alpha）最穩——SAM 單 seed 對「頭=髮+膚、穿衣=衣+膚」多色部件會漏一色，對瘦件會 over-grab 整身。SAM 對白底是過度設計（無內部自然邊可 snap），故降為 `--method sam` 選項。hintfg 前提：reference 須白底。
 
 ## 如何使用
 
@@ -54,14 +58,15 @@ python3 scripts/spine.py --character-id mychar \
 
 ## DGX 前置（一次性）
 
-ComfyUI 需裝 **ComfyUI-Impact-Pack**（提供 SAMLoader/MaskToSEGS/SAMDetectorCombined）+ SAM 權重 `sam_vit_b_01ec64.pth`（放 `/root/ComfyUI/models/sams/`，目錄不存在先 `mkdir`）。Flux 生成需 DGX GPU 正常。check skill 不盤點 SAM 類節點，**不能靠 check 驗 SAM 在不在**（須照本段自裝）。
+生成 reference 需 DGX GPU（Flux）正常。**切件預設 `hintfg` 純本地、不需 DGX/SAM**——給 `--reference` 既有白底圖時整條切件零 DGX。僅 `--method sam` 才需 ComfyUI 裝 **ComfyUI-Impact-Pack**（SAMLoader/MaskToSEGS/SAMDetectorCombined）+ SAM 權重 `sam_vit_b_01ec64.pth`（放 `/root/ComfyUI/models/sams/`，目錄不存在先 `mkdir`）。check skill 不盤點 SAM 類節點，**不能靠 check 驗 SAM 在不在**。
 
 ## 檔案結構
 
 ```
 scripts/
-  spine.py               單發半自動 CLI 主編排（sibling-import gen 通訊 + transparent 後處理）
-  spine_sam.py           SAM 切件 workflow builder（載 sam_part.json + 注入）
+  spine.py               單發半自動 CLI 主編排（--method hintfg 預設 / sam 選項）
+  spine_cut.py           hintfg 切件 primitive：part = hint ∩ 白底前景（純函式·白底預設）
+  spine_sam.py           SAM 切件 workflow builder（--method sam 用·載 sam_part.json + 注入）
   manifest_builder.py    content_bbox(padding=0) + manifest 組裝 + 校驗（純函式）
   spine_recompose.py     獨立「純依 manifest」貼回器（QC desync 偵測用，純函式）
   spine_qc.py + spine_qc_thresholds.py   8 閘 QC engine（純函式）

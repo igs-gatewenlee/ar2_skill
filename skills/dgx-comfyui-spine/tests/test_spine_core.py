@@ -1,9 +1,10 @@
 """spine v1 本地核心契約測試（BC-1/2/3/4/5/7/8/10 + 閘4，DGX 無關，fixture-driven）。"""
 import numpy as np
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
 import manifest_builder as mb
+import spine_cut
 import spine_qc
 import spine_qc_thresholds as T
 import spine_recompose
@@ -194,3 +195,41 @@ def test_gate4_arm_overlap_fails(tmp_path):
     parts_dir, manifest, ref = _build_fixture(tmp_path, rects=rects)
     rep = spine_qc.run_spine_qc(parts_dir, manifest, ref)
     assert rep["gates"]["4_arm_separation"]["status"] == "fail", rep["gates"]["4_arm_separation"]
+
+
+# ── spine_cut：hint∩前景 primitive（白底，多色不漏）──
+
+def test_spine_cut_foreground_white_vs_color():
+    ref = Image.new("RGB", (40, 40), (255, 255, 255))
+    ref.load()[20, 20] = (90, 60, 40)
+    fg = spine_cut.foreground_mask(ref)
+    assert not fg[0, 0]      # 白底=非前景
+    assert fg[20, 20]        # 有色=前景
+
+
+def test_spine_cut_multicolor_part_not_dropped():
+    # 雙色 blob（上半棕=髮、下半膚）+ hint 覆蓋 → hint∩前景 抓「整個雙色 blob」
+    # （SAM 單 seed 會只抓一色，此測證 hintfg 不漏色）
+    ref = Image.new("RGB", (100, 100), (255, 255, 255))
+    rp = ref.load()
+    for y in range(20, 50):
+        for x in range(30, 70):
+            rp[x, y] = (90, 60, 40)       # 髮
+    for y in range(50, 80):
+        for x in range(30, 70):
+            rp[x, y] = (240, 200, 180)    # 膚
+    hint = Image.new("L", (100, 100), 0)
+    ImageDraw.Draw(hint).rectangle((25, 15, 75, 85), fill=255)
+    full, bbox = spine_cut.cut_part(ref, hint)
+    assert bbox == (30, 20, 40, 60)                    # 整個雙色 blob 的 bbox
+    a = np.asarray(mb.crop_part(full, bbox))[..., 3]
+    assert (a > 0).sum() == 40 * 60                    # 髮+膚兩色全抓、不漏
+
+
+def test_spine_cut_empty_when_hint_misses_fg():
+    ref = Image.new("RGB", (40, 40), (255, 255, 255))
+    ref.load()[5, 5] = (10, 10, 10)
+    hint = Image.new("L", (40, 40), 0)
+    ImageDraw.Draw(hint).rectangle((20, 20, 35, 35), fill=255)  # hint 在白底區
+    full, bbox = spine_cut.cut_part(ref, hint)
+    assert full is None and bbox is None

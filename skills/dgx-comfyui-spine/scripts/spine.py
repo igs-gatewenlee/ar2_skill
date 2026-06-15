@@ -40,6 +40,7 @@ import transparent_postprocess as pp  # noqa: E402
 from config import COMFYUI_ROOT, INPUT_DIR  # noqa: E402  (gen/config 單一來源，CC-3)
 
 import manifest_builder as mb  # noqa: E402
+import spine_cut  # noqa: E402
 import spine_qc  # noqa: E402
 import spine_qc_thresholds as T  # noqa: E402
 import spine_sam  # noqa: E402
@@ -77,11 +78,12 @@ def _gen_reference(out_ref: Path, prompt: str | None, seed: int, size: int) -> N
     print(f"   reference → {out_ref}")
 
 
-def _cut_part(name: str, reference: Image.Image, hint_local: Path,
-              char_remote_name: str, run_tag: str) -> tuple[Image.Image, tuple]:
-    """跑 SAM 精修 → 下載 mask → compose/edge_bleed/fix_alpha → content_bbox 裁件。
+def _cut_part_sam(name: str, reference: Image.Image, hint_local: Path,
+                  char_remote_name: str, run_tag: str) -> tuple[Image.Image, tuple]:
+    """[--method sam] 跑 SAM 精修 → 下載 mask → compose/edge_bleed/fix_alpha → content_bbox 裁件。
 
     回 (part_rgba, bbox)。bbox = (x,y,w,h) 全圖座標，part_rgba.size==(w,h)（BC-1 同 bbox 保證）。
+    ⚠️ SAM 單 seed 跨不過色彩斷層（多色部件漏、瘦件 over-grab，demo 實證）→ 白底改用 hintfg。
     """
     hint_remote = f"spine_hint_{run_tag}_{name}.png"
     ssh_client.scp_put(hint_local, f"{INPUT_DIR}/{hint_remote}")
@@ -110,7 +112,10 @@ def run(args) -> int:
     parts_dir = folder / "parts"
     parts_dir.mkdir(parents=True, exist_ok=True)
 
-    ssh_client.ensure_tunnel()
+    # 白底 hintfg 純本地切件 → 只有「生成 reference」或「--method sam」才需 DGX
+    need_dgx = (not args.reference) or args.method == "sam"
+    if need_dgx:
+        ssh_client.ensure_tunnel()
 
     ref_path = folder / "reference.png"
     if args.reference:
@@ -121,7 +126,8 @@ def run(args) -> int:
 
     reference = Image.open(ref_path).convert("RGB")
     char_remote = f"spine_ref_{run_tag}.png"
-    ssh_client.scp_put(ref_path, f"{INPUT_DIR}/{char_remote}")
+    if args.method == "sam":
+        ssh_client.scp_put(ref_path, f"{INPUT_DIR}/{char_remote}")
 
     hint_dir = Path(args.hint_dir)
     parts: dict = {}
@@ -130,8 +136,17 @@ def run(args) -> int:
         if not hint.exists():
             print(f"⚠️ 缺 hint {hint}（part {name} 跳過，QC 閘1 會標 missing）")
             continue
-        print(f"🔵 切件 {name} ...")
-        part_rgba, bbox = _cut_part(name, reference, hint, char_remote, run_tag)
+        print(f"🔵 切件 {name}（{args.method}）...")
+        if args.method == "sam":
+            part_rgba, bbox = _cut_part_sam(name, reference, hint, char_remote, run_tag)
+        else:  # hintfg（白底預設）：part = hint ∩ 前景，純本地
+            full, bbox = spine_cut.cut_part(reference, Image.open(hint))
+            if bbox is None:
+                print(f"⚠️ part {name} hint∩前景 全空（hint 沒對到前景？）跳過")
+                continue
+            part_rgba = mb.crop_part(full, bbox)
+            part_rgba = pp.edge_bleed(part_rgba)            # 填透明 RGB，避免羽化吃白
+            part_rgba, _ = pp.fix_alpha(part_rgba, "opaque", blur=0.6)  # 邊緣輕羽化
         part_rgba.save(parts_dir / f"{name}.png")
         parts[name] = {"bbox": bbox, "draw_order": T.DEFAULT_DRAW_ORDER.get(name, 1)}
 
@@ -160,6 +175,8 @@ def main():
     ap.add_argument("--prompt", default=None, help="覆寫 flux_starpose 內建白底 star-pose prompt")
     ap.add_argument("--size", type=int, default=1024)
     ap.add_argument("--seed", type=int, default=20260615)
+    ap.add_argument("--method", choices=["hintfg", "sam"], default="hintfg",
+                    help="hintfg=hint∩前景（白底預設·純本地·多色/瘦件穩） / sam=SAM 精修（非白底 / 需自動邊精修）")
     return run(ap.parse_args())
 
 
