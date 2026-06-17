@@ -1,0 +1,97 @@
+# ============================================================================
+# ar2 家族 DGX 部署參數 SSOT（Single Source Of Truth）
+# ============================================================================
+# 這是 ar2:dgx-comfyui-* 全家族「連線 / 路徑 / 模型 / 節點」的單一真相來源。
+# 各 skill 透過 skills/_shared/ar2_registry.py loader 讀取，不再各自抄一份。
+#
+# ⚠️ 機密邊界（此 repo 是 PUBLIC）：
+#   - 本檔 git-tracked，**只准放非機密值 + secret_ref 指標**，絕不放密碼字面。
+#   - 密碼值放 repo 外的 ~/.config/ar2/secrets.toml（per-machine、chmod 600、永不 ship）。
+#   - host/port/user/hostkey 早已在 tracked README/SKILL.md 公開，放這裡是 no-regression。
+#
+# 守恆：本檔值與消費端由 conservation tests 機械鎖定（見 skills/_shared/tests/）。
+# 多機擴充：v1 單 [machine]；未來加機器走 additive（不破壞 v1 消費端）。
+# ============================================================================
+
+schema_version = "1.0.0"
+
+# ---------------------------------------------------------------------------
+# [machine] — DGX（v1 單台；已驗全家族連線值逐字相同）
+# ---------------------------------------------------------------------------
+[machine]
+host = "192.168.5.27"
+ssh_port = 7915
+user = "root"
+comfyui_port = 8199
+# DGX SSH host key 指紋。Windows plink/pscp 用 -hostkey 略過 PuTTY registry cache。
+# ⚠️ nix（sshpass/ssh）走 StrictHostKeyChecking=no 不驗此指紋（內網信任假設）。
+ssh_hostkey_sha256 = "SHA256:OtBB08rctm5cBhh7549/AGRICofd7LXa8Fw2sJXvOOA"
+# DGX 只接受 password auth；不強制偏好會先試 publickey 而 Permission denied。
+ssh_opts = [
+    "-o", "PubkeyAuthentication=no",
+    "-o", "PreferredAuthentications=password",
+    "-o", "StrictHostKeyChecking=no",
+    "-o", "UserKnownHostsFile=/dev/null",
+    "-o", "LogLevel=ERROR",
+]
+
+# 憑證 = 只放指標，不放值。密碼值在 ~/.config/ar2/secrets.toml 的 [machine].password。
+[machine.credential]
+kind = "shared_intranet"          # 內網刻意共用（見 memory project_dgx_shared_credentials）
+secret_ref = "machine.password"   # → secrets.toml 的 [machine].password
+distribution = "well-known-default: root/root（內網成員共用；DGX 內網隔離為主防線）"
+
+# DGX 端路徑。loader 由 comfyui_root / aitk_root 衍生 models_dir/output_dir/... 等。
+[machine.paths]
+comfyui_root = "/root/ComfyUI"
+training_root = "/root/lora_training"     # alias: check 的 TRAINING_DIR == train 的 TRAINING_ROOT
+aitk_root = "/root/ai-toolkit"
+flux_base_path = "/root/flux-dev"         # diffusers 多檔格式；train preset name_or_path 必須==此
+comfyui_log = "/root/comfyui.log"
+start_script_deploy_path = "/root/start_comfyui.sh"
+disk_probe_fs = "/root"
+
+# GPU / 啟動約束（舊 driver 必帶 --disable-cuda-malloc，否則所有 GPU 推論撞 CUDA error）
+[machine.gpu_constraints]
+driver = "450.216.04"
+cuda = "11.0"
+gpu_model = "Tesla V100-DGXS-32GB"
+comfyui_launch_flags = ["--disable-cuda-malloc"]
+comfyui_listen = "0.0.0.0"
+process_pgrep_pattern = "python.*ComfyUI/main.py"
+min_vram_free_mb = 22000          # Flux LoRA 24gb preset 硬需求
+min_disk_free_gb = 10
+
+# ---------------------------------------------------------------------------
+# [local] — 本機端慣例（family 共用；per-skill 值由 loader helper 在地推導）
+# ---------------------------------------------------------------------------
+[local]
+cache_dir_tpl = "~/.cache/ar2-dgx-comfyui-{skill}"        # cache_dir_for(skill)
+output_dir_name_tpl = "outputs/ar2-dgx-comfyui-{skill}"   # output_dir_name_for(skill)
+last_inventory_file = "last-inventory.json"               # check
+last_run_file = "last-run.json"                           # gen
+local_dataset_dir_name = "datasets"                       # train
+# _output_root 落點優先序（取代 4 份散落的 _output_root copy）
+output_anchor_order = ["AR2_OUTPUT_ROOT", "CLAUDE_PROJECT_DIR", "cwd"]
+
+# ---------------------------------------------------------------------------
+# [expected_models] — check 盤點對照（category -> 必備檔名；空=開放類別只盤點不強制）
+#   ⚠️ inspect.py 的 EXPECTED 改為直接讀此表（消滅 models.md↔inspect.py 雙源漂移）。
+#   類別數 = len(expected_models)，文件標頭數字由此動態產生。
+# ---------------------------------------------------------------------------
+[expected_models]
+checkpoints = []
+diffusion_models = ["flux1-dev.safetensors"]
+clip = ["clip_l.safetensors", "t5xxl_fp8_e4m3fn.safetensors"]
+vae = ["flux_ae.safetensors"]
+loras = []
+controlnet = []
+embeddings = []
+upscale_models = []
+pulid = ["pulid_flux_v0.9.1.safetensors"]
+clip_vision = ["EVA02_CLIP_L_336_psz14_s6B.safetensors", "sigclip_vision_patch14_384.safetensors"]
+style_models = ["flux1-redux-dev.safetensors"]
+insightface = []
+facerestore_models = []
+layer_model = []                  # 透明 Route B（LayerDiffuse）；空 expected（選用）
+sams = []                         # spine --method sam 用；開放類別（sam_vit_b 由 workflow_models 追蹤）
