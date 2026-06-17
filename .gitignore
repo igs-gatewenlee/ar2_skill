@@ -8,8 +8,9 @@ __pycache__/
 # them untracked avoids git-clone plugin install bundling internal notes.)
 .claude-loop/
 
-# Per-skill credentials (each skill's own .gitignore also excludes config.py)
-**/config.py
+# config.py 現為零密值 shim（讀 _shared/ar2_registry SSOT），已 track 進 git
+# 供消費機 git pull 自動取得。真實密碼在 repo 外 ~/.config/ar2/secrets.toml；
+# CT-8 守恆測試 + pre-commit hook 擋密碼字面回流。
 
 # OS / editor junk
 .DS_Store

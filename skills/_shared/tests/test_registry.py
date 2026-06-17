@@ -156,6 +156,22 @@ def test_no_secret_value_in_registry():
     assert not re.search(r'password\s*=\s*["\']', toml_text), "registry 不可含 password 字面賦值"
 
 
+def test_ct8_no_secret_in_tracked_config():
+    """CT-8：所有（現已 track 的）config.py shim 不得含密碼字面。
+
+    config.py 從 gitignored 改為 tracked 零密值 shim 後，這道測試取代原本
+    『gitignore 整個檔』的防線——擋住肥 config.py（含密碼）誤被 commit 回流。
+    """
+    cfgs = list(_SKILLS.glob("dgx-comfyui-*/config.py"))
+    assert cfgs, "找不到任何 config.py shim（應有 check/gen/train）"
+    for cfg in cfgs:
+        text = cfg.read_text(encoding="utf-8")
+        assert not re.search(r'PASSWORD\s*=\s*["\']', text), f"{cfg} 含 PASSWORD 字面賦值"
+        assert not re.search(r'password\s*=\s*["\']', text), f"{cfg} 含 password 字面賦值"
+        # shim 應走 ar2_registry，不得自帶 HOST/PASSWORD 等連線值字面
+        assert "ar2_registry" in text, f"{cfg} 未透過 ar2_registry（疑似非 shim）"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     passed = 0
