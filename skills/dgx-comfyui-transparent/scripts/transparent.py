@@ -47,22 +47,14 @@ def _output_root() -> Path:
 
 _OUT_ROOT = _output_root() / "outputs" / "ar2-dgx-comfyui-transparent"
 
-# sibling check/gen config.py, co-located in plugin skills/ (transparent/ → skills/).
-# config.py is gitignored but present on disk (intentional shared-DGX creds、不動內容)。
-_CONFIG_CANDIDATES = [
-    _SKILL_DIR.parent / "dgx-comfyui-check" / "config.py",
-    _SKILL_DIR.parent / "dgx-comfyui-gen" / "config.py",
-]
+# 連線參數來源 = SSOT registry（skills/_shared/ar2_registry）；取代原本動態搜 check/gen
+# config.py 的脆弱（搬機須帶某 skill 的 config.py）。registry 隨 marketplace 自動到每台機。
+sys.path.insert(0, str(_SKILL_DIR.parent / "_shared"))
 
 
 def _load_conn():
-    for p in _CONFIG_CANDIDATES:
-        if p.exists():
-            spec = importlib.util.spec_from_file_location("ar2_config", p)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            return mod
-    raise SystemExit("找不到 ar2 config.py（連線參數來源）")
+    import ar2_registry
+    return ar2_registry
 
 
 def _ssh(cfg, *args, **kw):
@@ -162,7 +154,7 @@ def run_poc(args):
     _date = time.strftime("%Y-%m-%d")
     folder = asset_spec.asset_folder(_OUT_ROOT, _date, args.category, args.slug)
     folder.mkdir(parents=True, exist_ok=True)
-    out_dir = "/root/ComfyUI/output"
+    out_dir = cfg.OUTPUT_DIR
     for tagname, o in (("source", src), ("mask", msk)):
         remote = f"{cfg.USER}@{cfg.HOST}:{out_dir}/{o['subfolder']}/{o['filename']}"
         if _scp(cfg, remote, str(folder / f"{tagname}.png")).returncode != 0:

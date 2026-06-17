@@ -23,6 +23,7 @@ from typing import Literal
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ssh_client import ssh_exec  # noqa: E402
+from config import CUSTOM_NODES_DIR  # noqa: E402
 
 
 PatchState = Literal[
@@ -35,12 +36,10 @@ PatchState = Literal[
 ]
 
 
-PATCH_FILE = (
-    "/root/ComfyUI/custom_nodes/ComfyUI-PuLID-Flux-Enhanced/encoders_flux.py"
-)
-PATCH_NODE_DIR = (
-    "/root/ComfyUI/custom_nodes/ComfyUI-PuLID-Flux-Enhanced"
-)
+# 節點名/檔名屬上游節點私有行為契約（out-of-registry-scope）；只把 custom_nodes
+# 根路徑改讀 SSOT registry（CUSTOM_NODES_DIR = /root/ComfyUI/custom_nodes）。
+PATCH_NODE_DIR = f"{CUSTOM_NODES_DIR}/ComfyUI-PuLID-Flux-Enhanced"
+PATCH_FILE = f"{PATCH_NODE_DIR}/encoders_flux.py"
 PATCH_MARKER = ".to(self.norm"
 PATCH_MARKER_COUNT = 4  # 2 classes × 2 lines each (norm1 + norm2)
 

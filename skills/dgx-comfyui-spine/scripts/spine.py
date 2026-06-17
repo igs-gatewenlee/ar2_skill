@@ -33,11 +33,12 @@ _SKILLS = _SKILL_DIR.parent                                   # skills/
 sys.path.insert(0, str(Path(__file__).resolve().parent))     # local: spine_sam/manifest_builder/spine_qc
 sys.path.insert(0, str(_SKILLS / "dgx-comfyui-transparent" / "scripts"))  # transparent_postprocess
 sys.path.insert(0, str(_SKILLS / "dgx-comfyui-gen" / "scripts"))          # ssh_client/comfyui_api
+sys.path.insert(0, str(_SKILLS / "_shared"))                              # ar2_registry (SSOT)
 
 import comfyui_api  # noqa: E402
 import ssh_client  # noqa: E402
 import transparent_postprocess as pp  # noqa: E402
-from config import COMFYUI_ROOT, INPUT_DIR  # noqa: E402  (gen/config 單一來源，CC-3)
+from ar2_registry import INPUT_DIR, OUTPUT_DIR  # noqa: E402  (SSOT；解 sys.modules['config'] 跨 skill 借用碰撞)
 
 import manifest_builder as mb  # noqa: E402
 import spine_cut  # noqa: E402
@@ -73,7 +74,7 @@ def _gen_reference(out_ref: Path, prompt: str | None, seed: int, size: int) -> N
     if not files:
         raise SystemExit("❌ reference 生成無輸出")
     fn, sub = files[0]
-    remote = f"{COMFYUI_ROOT}/output/{sub + '/' if sub else ''}{fn}"
+    remote = f"{OUTPUT_DIR}/{sub + '/' if sub else ''}{fn}"
     ssh_client.scp_get(remote, out_ref)
     print(f"   reference → {out_ref}")
 
@@ -91,7 +92,7 @@ def _cut_part_sam(name: str, reference: Image.Image, hint_local: Path,
     pid, _, _ = comfyui_api.submit_prompt(wf, uuid.uuid4().hex)
     outs = comfyui_api.wait_for_completion(pid, poll_interval=3.0, timeout=600.0)
     fn, sub = comfyui_api.list_output_files(outs)[0]
-    remote = f"{COMFYUI_ROOT}/output/{sub + '/' if sub else ''}{fn}"
+    remote = f"{OUTPUT_DIR}/{sub + '/' if sub else ''}{fn}"
     mask_tmp = Path(f"/tmp/spine_mask_{run_tag}_{name}.png")
     ssh_client.scp_get(remote, mask_tmp)
 

@@ -28,35 +28,17 @@ from config import (  # noqa: E402
     TRAINING_DIR,
     CACHE_DIR,
     LAST_INVENTORY_FILE,
+    EXPECTED_MODELS,
 )
 from ssh_client import ssh_exec, ping_host  # noqa: E402
 import pulid_patch  # noqa: E402
 from health import run_all as run_health  # noqa: E402
 
 
-# Model categories + minimum expected files (count = len(EXPECTED)).
-# Keep this in sync with references/models.md "核心必備模型".
-EXPECTED: dict[str, list[str]] = {
-    "checkpoints": [],
-    "diffusion_models": ["flux1-dev.safetensors"],
-    "clip": ["clip_l.safetensors", "t5xxl_fp8_e4m3fn.safetensors"],
-    "vae": ["flux_ae.safetensors"],
-    "loras": [],
-    "controlnet": [],
-    "embeddings": [],
-    "upscale_models": [],
-    "pulid": ["pulid_flux_v0.9.1.safetensors"],
-    "clip_vision": [
-        "EVA02_CLIP_L_336_psz14_s6B.safetensors",
-        "sigclip_vision_patch14_384.safetensors",
-    ],
-    "style_models": ["flux1-redux-dev.safetensors"],
-    "insightface": [],
-    "facerestore_models": [],
-    # 透明素材 Route B（LayerDiffuse）透明 VAE / attn 權重。空 expected（v1 選用，
-    # 非核心）；盤點到此類即餵 Route B PoC gate（缺 → Route B pending）。
-    "layer_model": [],
-}
+# Model categories + minimum expected files.
+# SSOT：dgx-registry.toml [expected_models]（消滅 models.md↔inspect.py 雙源漂移）。
+# count = len(EXPECTED)；models.md 標頭與本表都源自 registry。
+EXPECTED: dict[str, list[str]] = EXPECTED_MODELS
 
 
 # --- Inventory ---

@@ -32,17 +32,15 @@ from config import (  # noqa: E402
     PASSWORD,
     SSH_OPTS,
     COMFYUI_PORT,
+    DGX_HOSTKEY,
 )
 
 
 IS_WIN = sys.platform == "win32"
 
-# Windows-only: DGX SSH host key fingerprint. plink/pscp use this via
-# `-hostkey` to skip the PuTTY registry cache entirely (PuTTY's registry
-# write can silently fail under some Windows ACL / portable-install setups,
-# leaving every -batch run prompting forever). Captured from the original
-# host key prompt; rotates only when the DGX SSH server's host key changes.
-DGX_HOSTKEY = "SHA256:OtBB08rctm5cBhh7549/AGRICofd7LXa8Fw2sJXvOOA"
+# Windows-only DGX SSH host key fingerprint (plink/pscp 用 -hostkey 略過 PuTTY
+# registry cache)。值來自 SSOT registry（machine.ssh_hostkey_sha256），不再三份各抄；
+# 僅 DGX SSH server host key 改變時更新該欄。
 
 
 class SSHToolingMissing(RuntimeError):
