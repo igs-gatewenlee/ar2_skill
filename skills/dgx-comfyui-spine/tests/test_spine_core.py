@@ -1,4 +1,6 @@
 """spine v1 本地核心契約測試（BC-1/2/3/4/5/7/8/10 + 閘4，DGX 無關，fixture-driven）。"""
+import time
+
 import numpy as np
 import pytest
 from PIL import Image, ImageDraw
@@ -251,3 +253,211 @@ def test_spine_cut_dilate_grows_within_fg_only():
     assert a1 > a0  # dilate 後覆蓋更多前景（關縫）
     fg = spine_cut.foreground_mask(ref)
     assert int(((np.asarray(f1)[..., 3] > 0) & ~fg).sum()) == 0  # 不長進背景
+
+
+# ════════════════════════════════════════════════════════════════════════
+# spine-15：spine_sam.build_sam_workflow() JSON 注入邏輯（純函式，零外部依賴）
+#   conftest 已把 scripts/ 掛上 sys.path；spine_sam 讀靜態 sam_part.json + strip + inject。
+# ════════════════════════════════════════════════════════════════════════
+
+import spine_sam  # noqa: E402  （此前無任何 test import 它，build_sam_workflow 完全未測）
+
+
+def test_build_sam_workflow_strips_comment():
+    # BC-6：送 /prompt 前 strip 非 dict 頂層 key（_comment）；節點集合鎖 1..7
+    wf = spine_sam.build_sam_workflow("c.png", "h.png", "p")
+    assert "_comment" not in wf
+    assert all(isinstance(v, dict) for v in wf.values())
+    assert sorted(wf.keys()) == ["1", "2", "3", "4", "5", "6", "7"]
+
+
+def test_build_sam_workflow_injection():
+    # 三個注入點：char→node1、hint→node2、prefix→node7
+    wf = spine_sam.build_sam_workflow("c.png", "h.png", "p")
+    assert wf["1"]["inputs"]["image"] == "c.png"
+    assert wf["2"]["inputs"]["image"] == "h.png"
+    assert wf["7"]["inputs"]["filename_prefix"] == "p"
+
+
+def test_build_sam_workflow_node_class_contract():
+    # 鎖 JSON↔code 的 node 映射，防 sam_part.json 重新編號靜默把值寫進錯節點
+    wf = spine_sam.build_sam_workflow("c.png", "h.png", "p")
+    assert wf["1"]["class_type"] == "LoadImage"
+    assert wf["2"]["class_type"] == "LoadImageMask"
+    assert wf["7"]["class_type"] == "SaveImage"
+
+
+def test_build_sam_workflow_preserves_other_nodes():
+    # 未注入的 node（SAMDetectorCombined）預設值原樣保留 → 確認 strip/inject 沒誤刪未動節點
+    wf = spine_sam.build_sam_workflow("c.png", "h.png", "p")
+    assert wf["5"]["class_type"] == "SAMDetectorCombined"
+    assert wf["5"]["inputs"]["threshold"] == 0.93
+
+
+def test_build_sam_workflow_distinct_args_no_crosstalk():
+    # 不同呼叫的三參數各自獨立、互不串味（防注入點寫錯欄位）
+    wf = spine_sam.build_sam_workflow("CHAR.png", "HINT.png", "PREFIX")
+    assert wf["1"]["inputs"]["image"] == "CHAR.png"
+    assert wf["2"]["inputs"]["image"] == "HINT.png"
+    assert wf["7"]["inputs"]["filename_prefix"] == "PREFIX"
+    # node2 的 channel 預設不被 image 注入污染
+    assert wf["2"]["inputs"]["channel"] == "red"
+
+
+# ════════════════════════════════════════════════════════════════════════
+# spine-16：spine.run() 編排/arg-routing 邏輯
+#   hintfg + --reference 路徑 100% 純本地（檔案 I/O + numpy/PIL，零 DGX）。
+#   全程 monkeypatch DGX 依賴成 raise（守恆斷言）；用合成白底 reference + 對齊 hint-dir。
+#   hermetic（F-1）：delenv 兩個 env → 再把 AR2_OUTPUT_ROOT 指向 tmp_path 控制落點。
+# ════════════════════════════════════════════════════════════════════════
+
+import spine  # noqa: E402  （此前無任何 test import spine / 觸 run()）
+
+
+class _Args:
+    """模擬 argparse.Namespace（run() 只讀屬性）。"""
+
+    def __init__(self, **kw):
+        self.character_id = None
+        self.hint_dir = None
+        self.reference = None
+        self.prompt = None
+        self.size = 1024
+        self.seed = 20260615
+        self.method = "hintfg"
+        self.dilate = 0
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+
+def _make_spine_ref(tmp_path, rects=RECTS):
+    """合成白底 reference.png（同 _build_fixture 的彩塊配置），回 ref 路徑。"""
+    ref = Image.new("RGB", REF_SIZE, (255, 255, 255))
+    rp = ref.load()
+    for name, (x0, y0, x1, y1) in rects.items():
+        for y in range(y0, y1):
+            for x in range(x0, x1):
+                rp[x, y] = COLORS[name]
+    ref_path = tmp_path / "ref.png"
+    ref.save(ref_path)
+    return ref_path
+
+
+def _make_hint_dir(tmp_path, names, rects=RECTS):
+    """每件造一個略大於 rect 的白底 hint PNG（hintfg 會 ∩ 前景），回 hint-dir 路徑。"""
+    hint_dir = tmp_path / "hints"
+    hint_dir.mkdir()
+    for name in names:
+        x0, y0, x1, y1 = rects[name]
+        h = Image.new("L", REF_SIZE, 0)
+        ImageDraw.Draw(h).rectangle((x0 - 2, y0 - 2, x1 + 1, y1 + 1), fill=255)
+        h.save(hint_dir / f"{name}.png")
+    return hint_dir
+
+
+def _block_dgx(monkeypatch):
+    """把四個 DGX 依賴全 monkeypatch 成 raise-on-call（守恆：被呼叫即測試失敗）。"""
+    def boom(*a, **k):
+        raise AssertionError("DGX 依賴在純本地路徑被呼叫了（need_dgx 判定錯）")
+
+    monkeypatch.setattr(spine.ssh_client, "ensure_tunnel", boom)
+    monkeypatch.setattr(spine.ssh_client, "scp_put", boom)
+    monkeypatch.setattr(spine.ssh_client, "scp_get", boom)
+    monkeypatch.setattr(spine.comfyui_api, "submit_prompt", boom)
+
+
+def _run_folder(tmp_path, run_tag):
+    """run() 的輸出夾路徑（_output_root()/outputs/.../{date}_{tag}）。"""
+    return (tmp_path / "outputs" / "ar2-dgx-comfyui-spine"
+            / f"{time.strftime('%Y-%m-%d')}_{run_tag}")
+
+
+def test_run_hintfg_reference_is_fully_local(tmp_path, monkeypatch):
+    # need_dgx=(not reference) or method=='sam' → hintfg+reference 為 False → 全本地、零 DGX
+    monkeypatch.delenv("AR2_OUTPUT_ROOT", raising=False)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.setenv("AR2_OUTPUT_ROOT", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    _block_dgx(monkeypatch)
+
+    ref_path = _make_spine_ref(tmp_path)
+    hint_dir = _make_hint_dir(tmp_path, T.EXPECTED_PARTS)
+    args = _Args(character_id="loc", hint_dir=str(hint_dir),
+                 reference=str(ref_path), method="hintfg", dilate=0)
+    rc = spine.run(args)  # 任一 DGX mock 被碰 → boom AssertionError；能回來即證純本地
+
+    assert rc == 0  # 四件齊全 → QC pass → exit 0
+    folder = _run_folder(tmp_path, "loc")
+    for name in T.EXPECTED_PARTS:
+        assert (folder / "parts" / f"{name}.png").exists()
+    assert (folder / "manifest.json").exists()
+    assert (folder / "qc_report.json").exists()
+
+
+def test_run_exit_code_fail_returns_2(tmp_path, monkeypatch, capsys):
+    # hint-dir 只放 head.png → 缺件 warning loop（EXPECTED_PARTS 驅動）+ 閘1 missing → fail → rc 2
+    monkeypatch.delenv("AR2_OUTPUT_ROOT", raising=False)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.setenv("AR2_OUTPUT_ROOT", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    _block_dgx(monkeypatch)
+
+    ref_path = _make_spine_ref(tmp_path)
+    hint_dir = _make_hint_dir(tmp_path, ["head"])  # 只 head，缺 torso/upper_arm_l/upper_arm_r
+    args = _Args(character_id="fail", hint_dir=str(hint_dir),
+                 reference=str(ref_path), method="hintfg")
+    rc = spine.run(args)
+
+    out = capsys.readouterr().out
+    assert "缺必備 hint torso.png" in out
+    assert "缺必備 hint upper_arm_l.png" in out
+    assert "缺必備 hint upper_arm_r.png" in out
+    assert rc == 2  # result=='fail' → return 0 if result!='fail' else 2 契約
+
+
+def test_run_dilate_routed_to_cut_part(tmp_path, monkeypatch):
+    # --dilate 應原值透傳到 spine_cut.cut_part（hintfg 路徑）
+    monkeypatch.delenv("AR2_OUTPUT_ROOT", raising=False)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.setenv("AR2_OUTPUT_ROOT", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    _block_dgx(monkeypatch)
+
+    real_cut = spine_cut.cut_part
+    seen = {}
+
+    def spy(ref_img, hint_img, **kw):
+        seen.setdefault("dilate", kw.get("dilate"))  # 記第一次的 dilate
+        return real_cut(ref_img, hint_img, **kw)
+
+    monkeypatch.setattr(spine.spine_cut, "cut_part", spy)
+
+    ref_path = _make_spine_ref(tmp_path)
+    hint_dir = _make_hint_dir(tmp_path, T.EXPECTED_PARTS)
+    args = _Args(character_id="dil", hint_dir=str(hint_dir),
+                 reference=str(ref_path), method="hintfg", dilate=6)
+    spine.run(args)
+
+    assert seen.get("dilate") == 6  # 透傳正確（非 0/None）
+
+
+def test_run_reference_skips_generation(tmp_path, monkeypatch):
+    # 帶 --reference → 不走 _gen_reference（submit_prompt raise 不被觸發）；
+    # 且 folder/reference.png 內容 == 給定 reference（轉 RGB 後）
+    monkeypatch.delenv("AR2_OUTPUT_ROOT", raising=False)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.setenv("AR2_OUTPUT_ROOT", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    _block_dgx(monkeypatch)  # 含 submit_prompt=boom → 若誤入 _gen_reference 會炸
+
+    ref_path = _make_spine_ref(tmp_path)
+    hint_dir = _make_hint_dir(tmp_path, T.EXPECTED_PARTS)
+    args = _Args(character_id="skip", hint_dir=str(hint_dir),
+                 reference=str(ref_path), method="hintfg")
+    rc = spine.run(args)  # 不 raise 即證明沒走生成路徑
+
+    assert rc == 0
+    folder = _run_folder(tmp_path, "skip")
+    saved = np.asarray(Image.open(folder / "reference.png").convert("RGB"))
+    given = np.asarray(Image.open(ref_path).convert("RGB"))
+    assert np.array_equal(saved, given)  # 既有 reference 原樣落地（轉 RGB）

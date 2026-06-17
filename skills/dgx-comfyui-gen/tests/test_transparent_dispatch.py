@@ -19,6 +19,15 @@ RI = plan_runner.plan_loader.ResolvedItem
 LP = plan_runner.plan_loader.LoadedPlan
 
 
+@pytest.fixture(autouse=True)
+def _isolate_output_root(monkeypatch):
+    """F-1 測試隔離：清掉 AR2_OUTPUT_ROOT / CLAUDE_PROJECT_DIR，讓受測碼
+    _output_root() fallback 到 cwd（chdir 過去的 tmp_path）。否則環境若有設
+    AR2_OUTPUT_ROOT，輸出會寫到真實專案 outputs/ 而非 tmp_path → 斷言失敗 + 污染。"""
+    monkeypatch.delenv("AR2_OUTPUT_ROOT", raising=False)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+
+
 def _loaded(items, **kw):
     base = dict(raw=None, items=items, workflow="flux_basic", size=[1024, 1024],
                 steps=20, lora=[], face_ref=None, pulid_weight=None,

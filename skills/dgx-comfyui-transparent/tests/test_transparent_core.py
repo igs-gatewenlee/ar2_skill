@@ -188,3 +188,40 @@ def test_bc10_version_increment(tmp_path):
     assert asset_spec.asset_filename("symbol", "gold_coin", 512, 2) == "symbol_gold_coin_512_v002.png"
     # v001 不被動
     assert (folder / "symbol_gold_coin_512_v001.png").read_bytes() == b"x"
+
+
+# ── transparent-1：un_premultiply 兩條分支（alpha=0 passthrough vs alpha>0 除法）──
+# 公開模組介面（SKILL.md 列出、spine skill 經 sibling-import 依賴），原本零 assert 覆蓋。
+# alpha=0 不除的 passthrough 正是下游 edge_bleed 依賴的前提，回歸風險真實。
+
+def test_un_premultiply_alpha0_passthrough():
+    """alpha==0 路徑：RGB 原值不動、不做除法（edge_bleed 下游依賴此前提）。"""
+    a0 = np.zeros((2, 2, 4), np.uint8)
+    a0[..., :3] = [255, 128, 64]
+    a0[..., 3] = 0
+    out = np.asarray(pp.un_premultiply(Image.fromarray(a0, "RGBA")))
+    # 全部像素 RGB 維持原值、alpha 仍 0
+    assert (out[..., 0] == 255).all()
+    assert (out[..., 1] == 128).all()
+    assert (out[..., 2] == 64).all()
+    assert (out[..., 3] == 0).all()
+
+
+def test_un_premultiply_alpha_pos_divides():
+    """alpha>0 路徑：straight = RGB / (alpha/255)，非均等放大；alpha 通道原樣保留。"""
+    a1 = np.zeros((2, 2, 4), np.uint8)
+    a1[..., :3] = [100, 50, 25]
+    a1[..., 3] = 128  # 128/255≈0.50196 → 100/0.502≈199, 50→99, 25→49（uint8 truncation 實算值）
+    out = np.asarray(pp.un_premultiply(Image.fromarray(a1, "RGBA")))
+    assert tuple(out[0, 0, :3]) == (199, 99, 49)
+    assert (out[..., 3] == 128).all()  # alpha 不被除法影響
+
+
+def test_un_premultiply_clips_overflow():
+    """極小 alpha 致除法爆衝 → clip 到 255，不溢位（uint8 wraparound 防護）。"""
+    a2 = np.zeros((2, 2, 4), np.uint8)
+    a2[..., :3] = [200, 200, 200]
+    a2[..., 3] = 1  # 200/(1/255)=51000 → clip 255
+    out = np.asarray(pp.un_premultiply(Image.fromarray(a2, "RGBA")))
+    assert tuple(out[0, 0, :3]) == (255, 255, 255)
+    assert (out[..., 3] == 1).all()

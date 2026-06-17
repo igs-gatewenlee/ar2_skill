@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -152,7 +154,7 @@ def test_no_secret_value_in_registry():
     """CT-8 雛形：registry 檔本身不含密碼字面（只准 secret_ref）。"""
     toml_text = (_SKILLS.parent / "dgx-registry.toml").read_text(encoding="utf-8")
     assert 'password' not in toml_text.lower() or 'secret_ref' in toml_text
-    # 明確：不可有 password = "..." 賦值
+    # 明確：registry 不得出現 password 鍵的字面賦值（等號後接引號的形式）
     assert not re.search(r'password\s*=\s*["\']', toml_text), "registry 不可含 password 字面賦值"
 
 
@@ -170,6 +172,42 @@ def test_ct8_no_secret_in_tracked_config():
         assert not re.search(r'password\s*=\s*["\']', text), f"{cfg} 含 password 字面賦值"
         # shim 應走 ar2_registry，不得自帶 HOST/PASSWORD 等連線值字面
         assert "ar2_registry" in text, f"{cfg} 未透過 ar2_registry（疑似非 shim）"
+
+
+def test_load_registry_missing_file_fail_loud():
+    """_shared-10：registry 檔不存在時 fail-loud 給可操作 RuntimeError。
+
+    覆蓋 ar2_registry.py line 36-40 的 not-found 分支——既有測試因真實
+    dgx-registry.toml co-located 而從不觸發此路徑。用 subprocess 隔離：
+    REGISTRY_PATH 與 _REG 皆在 import 時解析、模組已被 sibling 測試載入，
+    in-process import 不會重跑；subprocess 全新 interpreter 才能命中分支，
+    且不污染本進程 sys.modules（保護 sibling 測試）。
+
+    斷言 4 個契約：① 非零 exit ② RuntimeError 型別 ③ 可操作中文訊息
+    （含路徑回顯）④ AR2_REGISTRY_FILE 逃生門提示出現在訊息內。
+    """
+    bogus = "/nonexistent/ar2_registry_test/registry.toml"
+    # hermetic（F-1）：clean env，移除 process 漂移變數，顯式設 AR2_REGISTRY_FILE
+    env = {k: v for k, v in os.environ.items()}
+    env.pop("AR2_OUTPUT_ROOT", None)
+    env.pop("CLAUDE_PROJECT_DIR", None)
+    env["AR2_REGISTRY_FILE"] = bogus
+    r = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.path.insert(0, sys.argv[1]); import ar2_registry",
+            str(_SHARED),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode != 0, f"應 fail-loud 非零 exit，實得 0；stderr={r.stderr!r}"
+    assert "RuntimeError" in r.stderr, f"應拋 RuntimeError；stderr={r.stderr!r}"
+    assert "找不到 registry" in r.stderr, f"缺可操作中文訊息；stderr={r.stderr!r}"
+    assert bogus in r.stderr, f"訊息未回顯違規路徑；stderr={r.stderr!r}"
+    assert "AR2_REGISTRY_FILE" in r.stderr, f"缺逃生門提示；stderr={r.stderr!r}"
 
 
 if __name__ == "__main__":
