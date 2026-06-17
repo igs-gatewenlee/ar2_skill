@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# ar2-skills pre-commit：擋密碼字面進 git。
+# config.py 已從 gitignored 改為 track 的零密值 shim → 這道 hook 取代「gitignore 整檔」，
+# 防止肥 config.py（含密碼）或 registry 密碼字面誤被 commit。
+#
+# ⚠️ 一次性啟用（per-clone，core.hooksPath 是 local config，clone 後需各自設一次）：
+#     git config core.hooksPath .githooks
+# 守恆測試 CT-8 是主守衛（CI/pytest 必跑）；本 hook 為 best-effort 第二層（可被 --no-verify 繞）。
+set -e
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)
+[ -z "$STAGED" ] && exit 0
+
+# 1) 任何 staged 檔的 PASSWORD/password 字面賦值
+HITS=$(echo "$STAGED" | xargs -I{} grep -nHE '(PASSWORD|password)[[:space:]]*=[[:space:]]*["'"'"']' {} 2>/dev/null || true)
+# 2) 已知內網共用密碼字面出現在 config.py / registry（雙保險）
+SECRET_HITS=$(echo "$STAGED" | grep -E '(config\.py|dgx-registry\.toml)$' \
+    | xargs -I{} grep -nHE 'password[[:space:]]*=[[:space:]]*"root"' {} 2>/dev/null || true)
+
+if [ -n "$HITS$SECRET_HITS" ]; then
+    echo ""
+    echo "❌ ar2 pre-commit：staged 檔含密碼字面，拒絕 commit："
+    [ -n "$HITS" ] && echo "$HITS"
+    [ -n "$SECRET_HITS" ] && echo "$SECRET_HITS"
+    echo ""
+    echo "密碼只能在 repo 外 ~/.config/ar2/secrets.toml；registry/config.py 不得含密碼字面。"
+    exit 1
+fi
+exit 0

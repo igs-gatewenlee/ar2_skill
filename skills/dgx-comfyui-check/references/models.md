@@ -1,12 +1,14 @@
 # ComfyUI Models — 分類與核心必備清單
 
-13 個 models 子分類，存放於 DGX 的 `/root/ComfyUI/models/`。
+15 個 models 子分類，存放於 DGX 的 `/root/ComfyUI/models/`。
 
-`inspect.py` 的 `EXPECTED` dict 與本檔內容必須保持一致。修改其一時務必同步另一個。
+⚠️ SSOT 已收斂：`inspect.py` 的 `EXPECTED` 現由 `dgx-registry.toml [expected_models]` 產生
+（`EXPECTED = ar2_registry.EXPECTED_MODELS`）。本表為**人讀鏡像**，守恆測試 CT-4 + doc-lint
+鎖定一致；改分類請改 registry，勿手改本表清單語意（不再「兩處手動同步」）。
 
 ---
 
-## 全部 13 分類
+## 全部 15 分類
 
 | 分類 | 路徑 | 用途 |
 |------|------|------|
@@ -24,6 +26,7 @@
 | `insightface` | `/root/ComfyUI/models/insightface/` | 臉部偵測（antelopev2 / inswapper） |
 | `facerestore_models` | `/root/ComfyUI/models/facerestore_models/` | 臉部修復（CodeFormer / GFPGAN） |
 | `layer_model` | `/root/ComfyUI/models/layer_model/` | 透明素材 Route B（LayerDiffuse）透明 VAE / attn（v1 選用，缺→Route B PoC-pending） |
+| `sams` | `/root/ComfyUI/models/sams/` | SAM 權重（spine `--method sam` 用，如 sam_vit_b_01ec64.pth；開放類別） |
 
 ---
 

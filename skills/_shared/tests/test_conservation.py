@@ -135,6 +135,15 @@ def test_lint_plan_output_dir():
     assert name in tmpl, "default_outline.md output dir != registry"
 
 
+def test_lint_models_md_categories():
+    """doc-lint：models.md 提及所有 registry expected_models 類別 + 數量標頭一致（人讀鏡像不漂）。"""
+    md = (_SKILLS / "dgx-comfyui-check" / "references" / "models.md").read_text(encoding="utf-8")
+    for cat in reg.EXPECTED_MODELS:
+        assert f"`{cat}`" in md, f"models.md 漏類別 {cat}"
+    n = len(reg.EXPECTED_MODELS)
+    assert f"{n} 分類" in md or f"{n} 個" in md, f"models.md 標頭數字與 registry({n}) 不符"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     passed = 0
