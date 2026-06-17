@@ -1,7 +1,7 @@
 """Thin shim — DGX 部署參數 SSOT 在 ../../dgx-registry.toml + ~/.config/ar2/secrets.toml。
 
 保留此檔僅為向後相容既有 `from config import X` 呼叫點；值由 _shared/ar2_registry 提供。
-（gitignored，沿襲家族慣例；本檔已無任何密碼字面 —— 密碼在 repo 外 secrets.toml。）
+（本檔為 tracked 零密值 shim；無任何密碼字面 —— 密碼在 repo 外 ~/.config/ar2/secrets.toml。）
 """
 import sys as _sys
 from pathlib import Path as _Path

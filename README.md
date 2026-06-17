@@ -16,12 +16,12 @@
 
 ## Install（plugin marketplace · 多機）
 
-源碼 repo：`git@github.com:igs-gatewenlee/ar2_skill.git`（**私有**——含 DGX 私網明文密碼文件，⛔ 不可轉公開）。本 repo 自帶 `.claude-plugin/marketplace.json`，clone 下來即是 local marketplace。
+源碼 repo：`git@github.com:igs-gatewenlee/ar2_skill.git`（**PUBLIC**——自 1.2.5 SSOT registry 遷移起，repo 內零密碼字面：連線/路徑/模型在 `dgx-registry.toml`、密碼移到 repo 外 `~/.config/ar2/secrets.toml`，故可公開。詳見下方「安全」段）。本 repo 自帶 `.claude-plugin/marketplace.json`，clone 下來即是 local marketplace。
 
 **任何機器首裝**：
 ```bash
 git clone git@github.com:igs-gatewenlee/ar2_skill.git <你的位置>   # Mac: ~/Code/ar2-skills；Win 例: I:\ar2-skills
-# ⚠️ config.py 是 gitignored、不會跟著 clone —— check/gen/train 3 個 skill 的 config.py 要手動放一次
+# config.py 現為 tracked 零密值 shim（讀 dgx-registry.toml SSOT），隨 clone 帶來，無需手動放
 ```
 在 Claude Code 內：
 ```
@@ -29,6 +29,21 @@ git clone git@github.com:igs-gatewenlee/ar2_skill.git <你的位置>   # Mac: ~/
 /plugin install ar2@ar2-marketplace
 ```
 裝好後 5 個 `ar2:dgx-comfyui-*` skill 自動發現 + `/ar2:upgrade` command。
+
+**⚠️ 連 DGX 前：設定密碼（每台機一次性，永久有效）**
+
+密碼不在 repo 內，所以**每台要連 DGX 的機器**第一次都得提供密碼，否則 check/gen/train/spine/transparent 存取密碼時會 fail-loud。內網共用預設為 `root`。二選一：
+```bash
+# A. 環境變數 — 最快（加進 ~/.zshrc / ~/.bashrc 永久生效）
+export AR2_DGX_PASSWORD=root
+
+# B. 密碼檔 — loader 預設讀 ~/.config/ar2/secrets.toml（TOML，[machine] 區段的 password 欄位）
+mkdir -p ~/.config/ar2
+DGX_PW=root                                    # ← 換成你的 DGX 密碼
+{ echo '[machine]'; echo "password = \"$DGX_PW\""; } > ~/.config/ar2/secrets.toml
+chmod 600 ~/.config/ar2/secrets.toml
+```
+> 只用 `plan`（純本地、不連 DGX）的機器**不需要**——密碼是惰性解析，`import` 不觸發。
 
 **之後更新（任何機器、消費用）**：
 ```
@@ -62,28 +77,34 @@ claude --plugin-dir <你的位置>
 ```
 ar2-skills/
 ├── README.md                        ← this
-├── .gitignore                       ← 排除 config.py / __pycache__ / cache
+├── .gitignore                       ← 排除 __pycache__ / cache（config.py 已改 tracked 零密值 shim）
+├── dgx-registry.toml                ← DGX 部署參數 SSOT（連線/路徑/模型，零密值、git-tracked）
+├── .githooks/pre-commit             ← 擋密碼字面進 git（需 git config core.hooksPath .githooks）
 ├── .claude-plugin/
 │   ├── plugin.json                  ← plugin 元資料（name=ar2）
 │   └── marketplace.json             ← local-path marketplace 清單
 └── skills/
-    ├── dgx-comfyui-check/           ← SKILL.md, OVERVIEW.md, config.py(gitignored), scripts/, references/, hooks/
+    ├── _shared/                     ← ar2_registry.py（registry loader, PEP 562 惰性密碼）+ 守恆測試
+    ├── dgx-comfyui-check/           ← SKILL.md, OVERVIEW.md, config.py(零密值 shim), scripts/, references/, tests/
     ├── dgx-comfyui-gen/
     ├── dgx-comfyui-plan/
     ├── dgx-comfyui-train/
     └── dgx-comfyui-transparent/
 ```
 
-## 安全（私網信任模型）
+## 安全（SSOT registry + 私網信任模型）
 
-`dgx-comfyui-{check,gen,train}` 內各有 `config.py` 含 DGX（`192.168.5.27`）明文密碼。DGX 是**刻意共用機**（私網內人人可用、`root/root`），非洩漏——明文密碼為設計選擇，**不做 secret scrub / 換密碼**。
+自 **1.2.5** 起，DGX 部署參數收斂為 SSOT：
+- **`dgx-registry.toml`**（git-tracked、**零密碼**）：連線 metadata（`192.168.5.27` / port / `root` / hostkey）、路徑、模型。
+- **`~/.config/ar2/secrets.toml`**（**repo 外**、每台機本機）：密碼。`config.py` 是讀 registry 的零密值 shim；`PASSWORD` 由 `_shared/ar2_registry` 惰性解析（PEP 562）。
 
-- ⛔ **不要** push 到任何**公開** repo（私網信任模型只在內網成立；公開分享或 DGX 對外暴露才需重審）
-- ✅ `config.py` 在每個 skill 的 `.gitignore` 第一行 + 本 repo top-level `.gitignore` 也排除
-- ✅ 各 skill 保留 `hooks/pre-commit` 攔 PASSWORD literal commit（既有安全網）
-- ⚠️ **plugin cache 暴露面**：local-path marketplace install 是**逐字 filesystem 複製、不遵守 .gitignore**——`config.py`（含明文密碼）會連同被複製進 `~/.claude/plugins/cache/`。gitignore 只擋 git，**擋不住 cache**。在共用 DGX 信任模型下（同機本地、刻意共享）可接受；但 ⛔ **不要分享該 cache 目錄、也不要用 `--plugin-dir *.zip` 打包散佈**（會把明文密碼嵌入散佈物）。需更強隔離時，改讓 check/gen/train/transparent 從 plugin tree 外（如 `~/.config/ar2/config.py`）讀 config。
+DGX 是**刻意共用機**（私網內人人可用、`root/root`），非洩漏——共用憑證為設計選擇，**不做換密碼**；DGX 內網隔離為主防線。
 
-密碼旋轉（若需要）：先改 DGX → 改各 skill 的 config.py → 跑 `ar2:dgx-comfyui-check` 驗證。
+- ✅ **repo 可公開**：密碼字面從未進 git；registry / config.py / shim 全零密值（守恆測試 CT-8 把關）。公開面僅內網 IP/port/`root`/hostkey + well-known `root/root` default——低敏感。
+- ✅ **防線**：`skills/_shared/tests`（CT-8 等 16 守恆測試，CI/pytest 必跑、主守衛）+ `.githooks/pre-commit`（第二層，需 `git config core.hooksPath .githooks`；best-effort、可被 `--no-verify` 繞）。
+- ⚠️ **舊 cache 殘留**：1.2.5 之前（1.0.0–1.2.4）裝過的 plugin cache 仍含舊肥 `config.py`（明文密碼），因 local-path marketplace install 是**逐字 filesystem 複製、不遵守 .gitignore**。1.2.5 後 tracked shim 零密值，新裝 cache 已乾淨；舊 cache 可選清理：`find ~/.claude/plugins/cache -path '*dgx-comfyui*' -name config.py`。
+
+密碼旋轉（若需要）：先改 DGX → 改各機 `~/.config/ar2/secrets.toml`（不再碰 config.py）→ 跑 `ar2:dgx-comfyui-check` 驗證。
 
 ## 與 ai_cards workspace 的關係
 
