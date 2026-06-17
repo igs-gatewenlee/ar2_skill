@@ -108,6 +108,11 @@ _OUTPUT_DIR_NAME_TPL = _L["output_dir_name_tpl"]
 # 模型盤點對照（inspect.py 的 EXPECTED 直接讀此）-----------------------------
 EXPECTED_MODELS = {k: list(v) for k, v in _REG["expected_models"].items()}
 
+# 全補納管：workflow 模型 / 自訂節點 / 路線狀態（守恆測試 CT-5/11 用）-----------
+WORKFLOW_MODELS = {k: list(v) for k, v in _REG.get("workflow_models", {}).items()}
+REQUIRED_NODES = {k: dict(v) for k, v in _REG.get("required_nodes", {}).items()}
+ROUTE_STATUS = dict(_REG.get("route_status", {}))
+
 # 憑證 metadata（非密值）----------------------------------------------------
 CREDENTIAL_KIND = _C["kind"]
 CREDENTIAL_SECRET_REF = _C["secret_ref"]
@@ -191,8 +196,9 @@ __all__ = [
     # 本機慣例
     "LAST_INVENTORY_FILE", "LAST_RUN_FILE", "LOCAL_DATASET_DIR_NAME",
     "OUTPUT_ANCHOR_ORDER",
-    # 模型 / 憑證 metadata
-    "EXPECTED_MODELS", "CREDENTIAL_KIND", "CREDENTIAL_SECRET_REF", "CREDENTIAL_DISTRIBUTION",
+    # 模型 / 節點 / 路線 / 憑證 metadata
+    "EXPECTED_MODELS", "WORKFLOW_MODELS", "REQUIRED_NODES", "ROUTE_STATUS",
+    "CREDENTIAL_KIND", "CREDENTIAL_SECRET_REF", "CREDENTIAL_DISTRIBUTION",
     "SCHEMA_VERSION",
     # helper
     "cache_dir_for", "output_dir_name_for",

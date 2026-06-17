@@ -95,3 +95,52 @@ insightface = []
 facerestore_models = []
 layer_model = []                  # 透明 Route B（LayerDiffuse）；空 expected（選用）
 sams = []                         # spine --method sam 用；開放類別（sam_vit_b 由 workflow_models 追蹤）
+
+# ---------------------------------------------------------------------------
+# [workflow_models] — 各 workflow JSON 引用的模型檔（CT-5 鎖 JSON↔registry 不漂）
+#   key = "<skill>/<workflow檔名>"。sam_vit_b 不在 expected_models（sams 開放類別），
+#   由此處追蹤 → CT-5 不誤判。
+# ---------------------------------------------------------------------------
+[workflow_models]
+"gen/flux_basic" = ["clip_l.safetensors", "flux1-dev.safetensors", "flux_ae.safetensors", "t5xxl_fp8_e4m3fn.safetensors"]
+"gen/flux_pulid" = ["clip_l.safetensors", "flux1-dev.safetensors", "flux1-redux-dev.safetensors", "flux_ae.safetensors", "pulid_flux_v0.9.1.safetensors", "sigclip_vision_patch14_384.safetensors", "t5xxl_fp8_e4m3fn.safetensors"]
+"spine/flux_starpose" = ["clip_l.safetensors", "flux1-dev.safetensors", "flux_ae.safetensors", "t5xxl_fp8_e4m3fn.safetensors"]
+"spine/sam_part" = ["sam_vit_b_01ec64.pth"]
+"transparent/route_a_rmbg" = ["clip_l.safetensors", "flux1-dev.safetensors", "flux_ae.safetensors", "t5xxl_fp8_e4m3fn.safetensors"]
+"transparent/vfx_additive" = ["clip_l.safetensors", "flux1-dev.safetensors", "flux_ae.safetensors", "t5xxl_fp8_e4m3fn.safetensors"]
+
+# ---------------------------------------------------------------------------
+# [required_nodes] — 各 workflow 需要的 ComfyUI 自訂節點（node 缺→workflow 炸 的維度）
+#   provides = 該 node 提供的 class_type；CT-11 鎖 workflow 用到的 custom 節點都有登記。
+# ---------------------------------------------------------------------------
+[required_nodes.ComfyUI-PuLID-Flux-Enhanced]
+provides = ["ApplyPulidFlux", "PulidFluxModelLoader", "PulidFluxEvaClipLoader", "PulidFluxInsightFaceLoader"]
+required_by = ["gen/flux_pulid"]
+status = "active"
+install = "git clone 至 custom_nodes/；check 的 pulid_patch 另需 encoders_flux dtype patch"
+
+[required_nodes.ComfyUI-Impact-Pack]
+provides = ["SAMLoader", "SAMDetectorCombined", "MaskToSEGS"]
+required_by = ["spine/sam_part"]
+status = "active"
+install = "git clone + SAM 權重 sam_vit_b_01ec64.pth 放 models/sams/（僅 spine --method sam 需要）"
+
+[required_nodes.ComfyUI-Inspyrenet-Rembg]
+provides = ["InspyrenetRembgAdvanced"]
+required_by = ["transparent/route_a_rmbg"]
+status = "active"
+install = "git clone；DGX 舊 driver 需 patch_rembg_cpu.sh 強制 CPU"
+
+[required_nodes.LayerDiffuse]
+provides = []
+required_by = ["transparent/route_b"]
+status = "pending"
+install = "Route B PoC-pending（DGX 缺節點 + SDXL）"
+
+# ---------------------------------------------------------------------------
+# [route_status] — 透明素材/工作流路線狀態（CT-5/CT-11 對 pending route 放行缺檔/缺節點）
+# ---------------------------------------------------------------------------
+[route_status]
+route_a_rmbg = "active"
+vfx_additive = "active"
+route_b_layerdiffuse = "pending"
